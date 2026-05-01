@@ -10,7 +10,10 @@
   "files": [
     "dist",
     "src",
+    "README.md",
+    "README.ja.md",
     "SYNTAX.md",
+    "SYNTAX.ja.md",
     "LICENSE"
   ],
   "scripts": {

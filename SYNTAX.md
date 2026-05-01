@@ -1,192 +1,189 @@
 # sql-emmet syntax reference
 
-最後にまとめた日: 2026-05-01
+> English | [日本語](SYNTAX.ja.md)
 
-このドキュメントは、現状実装されている sql-emmet の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
+Last updated: 2026-05-01
 
----
-
-## 1. 設計思想
-
-- **動詞プレフィックス + 演算子記号** で SELECT/INSERT/UPDATE/DELETE を最短表現
-- 各 SQL 句に**ユニークな記号**を割り当ててトップレベルで曖昧性ゼロ
-- リテラルはダブルクォート (`"x"`) で、識別子は裸で書く
-- スキーマ依存の補完（FK解決等）は**ホストが提供する Resolver** に委譲
+This document covers the full grammar and semantics of sql-emmet as currently
+implemented. If the implementation and this doc disagree, **the implementation
+wins** — fix the doc.
 
 ---
 
-## 2. 動詞プレフィックス
+## 1. Design philosophy
 
-| プレフィックス | 操作 | 例 |
+- **Verb prefix + operator sigils** to express SELECT/INSERT/UPDATE/DELETE in the fewest characters
+- Each SQL clause gets a **unique sigil**, so top-level parsing has zero ambiguity
+- Literals are double-quoted (`"x"`); identifiers are bare
+- Schema-aware features (FK resolve, completion) delegate to a host-provided **Resolver**
+
+---
+
+## 2. Verb prefixes
+
+| Prefix | Operation | Example |
 |---|---|---|
-| (なし) | SELECT | `users>name?id=1` |
+| (none) | SELECT | `users>name?id=1` |
 | `+` | INSERT | `+users<name="alice"` |
 | `=` | UPDATE | `=users<name="bob"?id=1` |
 | `-` | DELETE | `-users?id=1` |
 
-**位置依存**:
-- 文頭の `+` `-` `=` は動詞
-- 文中の `+` は JOIN
-- 文中の `-` は ORDER BY 内の DESC マーカー
-- 文中の `=` は比較演算子
+**Position-dependent meaning**:
+- Leading `+` `-` `=` are verbs
+- Mid-statement `+` is JOIN
+- Mid-statement `-` is the DESC marker inside ORDER BY
+- Mid-statement `=` is a comparison operator
 
-文脈で完全に分離されるため、PEGで一意にパースできる。
+The grammar separates these contexts cleanly, so PEG parses them
+unambiguously.
 
 ---
 
-## 3. 演算子マップ（SELECT文中）
+## 3. Operator map (within a SELECT)
 
-| 記号 | 用途 | 例 |
+| Symbol | Use | Example |
 |---|---|---|
-| `@` | エイリアス | `users@u`, `sum(x)@total` |
-| `>` | SELECT列リスト | `users>name,email` |
+| `@` | alias | `users@u`, `sum(x)@total` |
+| `>` | SELECT column list | `users>name,email` |
 | `?` | WHERE | `users?id=1` |
 | `+` | JOIN | `users+orders` |
-| `[ ]` | ON条件 ／ IN（リスト/参照/サブクエリ） | `+t[a.id=b.id]`, `?id[1,2,3]`, `?id[cte]`, `?id[(subq)]` |
-| `( )` | インラインサブクエリ ／ INSERT列リスト ／ 式グルーピング | `+t<(s>x)`, `+t(c1,c2)<(...)` |
-| `{ }` | CTE（文頭）／ INSERT行ブロック（`<`の後） | `{src>x}@s`, `+t<{a=1},{a=2}` |
+| `[ ]` | ON ／ IN (list / ref / subquery) | `+t[a.id=b.id]`, `?id[1,2,3]`, `?id[cte]`, `?id[(subq)]` |
+| `( )` | inline subquery ／ INSERT column list ／ expression grouping | `+t<(s>x)`, `+t(c1,c2)<(...)` |
+| `{ }` | CTE (statement head) ／ INSERT row block (after `<`) | `{src>x}@s`, `+t<{a=1},{a=2}` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
 | `~` | LIMIT/PAGE | `~20p3` |
-| `,` | リスト区切り兼AND | |
+| `,` | list separator / AND | |
 | `\|` | OR | `?a=1\|b=2` |
 | `%` | LIKE | `?name%"john"` |
-| `"..."` | 文字列リテラル | |
-| `=` `<` `>` `<=` `>=` `<>` `!=` | 比較 | |
+| `"..."` | string literal | |
+| `=` `<` `>` `<=` `>=` `<>` `!=` | comparison | |
 
 ---
 
-## 4. SELECT 構文
+## 4. SELECT syntax
 
-### 4.1 基本構造
-
-```
-[CTEブロック] テーブル参照 [節...]
-```
-
-各節は**任意の順序**で書ける。コンパイラが SQL の正規順に並べ直す。
-
-### 4.2 テーブル参照とエイリアス
+### 4.1 Skeleton
 
 ```
-users               # 別名なし
-users@u             # 別名 u
+[CTE block] table-ref [clauses...]
 ```
 
-### 4.3 SELECT列リスト `>`
+Clauses can appear in **any order**. The compiler reorders them into canonical
+SQL order on output.
+
+### 4.2 Table reference and alias
 
 ```
-users>name,email                # 2列
-users>*                         # 全列
-users@u>u.*                     # 別名uで全列指定（qualified star）
-users>name@n,email@e            # 列にエイリアス
-users>sum(price)@total          # 集約関数
-users@u>u.name,u.email          # 修飾列
+users               # no alias
+users@u             # aliased as u
 ```
 
-複数テーブルJOIN下では `t.*` と通常列を混在できる: `a@a+b@b[a.id=b.aid]>a.*,b.x`
-
-**`t.*` の典型用途**:
-JOINした副テーブルをWHERE句のフィルタとしてだけ使い、SELECT結果には主テーブルの列だけ出したい時:
+### 4.3 SELECT column list — `>`
 
 ```
-wholesalers@w>w.*?f.child_code["a","b","c"]+<formats@f[f.id=w.format_id]
-→ SELECT w.* FROM wholesalers w
-   LEFT JOIN formats f ON f.id = w.format_id
-   WHERE f.child_code IN ('a', 'b', 'c')
+users>name,email                # 2 columns
+users>*                         # all columns
+users@u>u.*                     # qualified star (all columns of alias u)
+users>name@n,email@e            # column aliases
+users>sum(price)@total          # aggregate
+users@u>u.name,u.email          # qualified columns
 ```
 
-省略時は暗黙的に `*`。
+`t.*` and bare columns can be mixed in JOIN scope: `a@a+b@b[a.id=b.aid]>a.*,b.x`.
 
-### 4.4 WHERE `?`
+If omitted, defaults to `*`.
+
+### 4.4 WHERE — `?`
 
 ```
-users?id=1                      # 等価
-users?age>=18                   # 比較
-users?id<>0                     # 不等
+users?id=1                      # equality
+users?age>=18                   # comparison
+users?id<>0                     # inequality
 users?name%"john"               # LIKE
 users?id[1,2,3]                 # IN
-users?a=1,b=2                   # AND（カンマ）
-users?a=1|b=2                   # OR（パイプ）
-users?a=1,b=2|c=3               # AND/OR混在 → (a=1 AND b=2) OR c=3
-users?(a=1|b=2),c=3             # 括弧でグループ化
+users?a=1,b=2                   # AND (comma)
+users?a=1|b=2                   # OR (pipe)
+users?a=1,b=2|c=3               # mixed → (a=1 AND b=2) OR c=3
+users?(a=1|b=2),c=3             # explicit grouping
 ```
 
-### 4.5 JOIN `+`
+### 4.5 JOIN — `+`
 
-| 記法 | JOIN種別 |
+| Form | JOIN type |
 |---|---|
-| `+tbl` | INNER（既定） |
+| `+tbl` | INNER (default) |
 | `+<tbl` | LEFT |
 | `+>tbl` | RIGHT |
 | `+*tbl` | FULL |
 | `+~tbl` | CROSS |
 
-ON は `[ ]` で続けて指定:
+ON is given via `[ ]`:
 
 ```
 users@u+orders@o[u.id=o.user_id]
 ```
 
-ON を省略するとスキーマ Resolver から FK 自動解決（後述）。
+If ON is omitted, the schema Resolver is queried for an FK (see §8).
 
-### 4.6 GROUP BY `#`
+### 4.6 GROUP BY — `#`
 
 ```
-orders#user_id                  # 単一列
-orders#user_id,status           # 複数列
+orders#user_id                  # single column
+orders#user_id,status           # multiple
 ```
 
-### 4.7 HAVING `:`
+### 4.7 HAVING — `:`
 
 ```
 orders#user_id>sum(total)@s:s>1000
 ```
 
-WHERE と同じ式構文。
+Same expression grammar as WHERE.
 
-### 4.8 ORDER BY `$`
+### 4.8 ORDER BY — `$`
 
 ```
-users$created_at                # ASC（既定）
+users$created_at                # ASC (default)
 users$-created_at               # DESC
-users$+name                     # ASC（明示）
-users$-priority,+name           # 複数キー
+users$+name                     # ASC (explicit)
+users$-priority,+name           # multiple keys
 ```
 
-### 4.9 LIMIT/PAGE `~`
+### 4.9 LIMIT / PAGE — `~`
 
 ```
 users~20                        # LIMIT 20
-users~20p3                      # LIMIT 20 OFFSET 40（page=3）
+users~20p3                      # LIMIT 20 OFFSET 40 (page=3)
 ```
 
-`page=1` が既定なので OFFSET=0 → `LIMIT n` のみ出力。
+`page=1` is the default, so OFFSET=0 emits just `LIMIT n`.
 
-DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
+Per-dialect rendering can be swapped via `CompileOptions.paginate`.
 
 ---
 
-## 5. CUD 構文
+## 5. CUD syntax
 
 ### 5.1 INSERT — `+`
 
-#### 5.1.1 単一行
+#### 5.1.1 Single row
 
 ```
 +users<name="alice",age=30
 → INSERT INTO users (name, age) VALUES ('alice', 30)
 ```
 
-#### 5.1.2 複数行（`{}` 行ブロック）
+#### 5.1.2 Multiple rows (using `{}` row blocks)
 
 ```
 +users<{name="alice",age=30},{name="bob",age=25}
 → INSERT INTO users (name, age) VALUES ('alice', 30), ('bob', 25)
 ```
 
-各行ブロックは**同じ列を同じ順で**宣言する必要あり。違反するとコンパイル時エラー。
+Every row block must declare the **same columns in the same order** —
+violations are caught at compile time.
 
 #### 5.1.3 INSERT...SELECT
 
@@ -198,7 +195,8 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
 → INSERT INTO users (name, age) SELECT name, age FROM other WHERE active = 1
 ```
 
-列リストは `+table` 直後の `( )` で明示。省略時は INSERT 側に列リストを出さない。
+The column list is given via `( )` after the verb+table. If omitted, no
+target column list is emitted.
 
 ### 5.2 UPDATE — `=`
 
@@ -213,9 +211,9 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
 → UPDATE users u SET active = 0 WHERE u.id = 5
 ```
 
-#### 5.2.1 複合代入（SET右辺のみ）
+#### 5.2.1 Compound assignment (SET right-hand side only)
 
-| 演算子 | 展開 |
+| Operator | Expansion |
 |---|---|
 | `+=` | `col = col + v` |
 | `-=` | `col = col - v` |
@@ -227,7 +225,8 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
 → UPDATE users SET count = count + 1 WHERE id = 5
 ```
 
-複合代入は SET の右辺**だけ**で有効。WHERE 等の式では算術未対応。
+Compound assignment is valid **only** in SET right-hand sides. Other
+expressions don't yet support arithmetic.
 
 ### 5.3 DELETE — `-`
 
@@ -236,14 +235,15 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
 → DELETE FROM users WHERE id = 5
 
 -users
-→ DELETE FROM users      # WHERE省略は構文上は許容
+→ DELETE FROM users      # WHERE-less DELETE is permitted at the syntax level
 ```
 
-> 全行削除を文法レベルでブロックしない設計判断。安全装置はホスト側で。
+> Mass-delete is intentionally not blocked at the syntax level. Safety guards
+> belong in the host application.
 
 ---
 
-## 6. CTE — `{ }` プレフィックス
+## 6. CTE — `{ }` prefix
 
 ```
 {src>name?active=1}@active_users + users@u[active_users.id=u.id]
@@ -252,10 +252,11 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
    INNER JOIN users u ON active_users.id = u.id
 ```
 
-**ルール**:
-- `{ ... }@name` で1つのCTE定義
-- 複数CTE は `{...}@a,{...}@b` でカンマ区切り
-- CTE ブロックと主クエリの間にも**任意で `,` を置ける**（SQLの `WITH a AS (...), b AS (...) SELECT...` 感覚）:
+**Rules**:
+- `{ ... }@name` defines one CTE
+- Multiple CTEs: `{...}@a,{...}@b` (comma separated)
+- An **optional `,`** is allowed between the CTE block and the main query
+  (mirrors the SQL feel of `WITH a AS (...), b AS (...) SELECT...`):
 
 ```
 {formats>id?id[1,2,3,4]}@f,wholesalers>*?format_id[f]
@@ -263,65 +264,68 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
    SELECT * FROM wholesalers WHERE format_id IN (SELECT * FROM f)
 ```
 
-- メインクエリで FROM が省略され、かつ CTE が**1つだけ**なら、その CTE alias が暗黙の FROM になる
-- CTE は CUD 動詞の前にも書ける: `{...}@s+target<(s>...)`
+- If the main query has no FROM and there's exactly **one** CTE, that CTE
+  becomes the implicit FROM
+- A CTE block can also precede a CUD verb: `{...}@s+target<(s>...)`
 
 ---
 
-## 7. 式（Expression）
+## 7. Expressions
 
-### 7.1 リテラル
-
-```
-1            数値
-1.5          浮動小数
-"hello"      文字列（"内のエスケープは \" \\ ）
-```
-
-### 7.2 識別子
+### 7.1 Literals
 
 ```
-name         単純識別子
-u.name       qualified（ドット2段）
+1            integer
+1.5          float
+"hello"      string (escapes inside ": \" \\)
 ```
 
-### 7.3 関数呼び出し
+### 7.2 Identifiers
+
+```
+name         simple
+u.name       qualified (one dot)
+```
+
+### 7.3 Function calls
 
 ```
 sum(price)
-count(*)              # ※ * を引数に直接書く構文は v0 で未サポート
+count(*)              # NOTE: bare * argument is not yet supported in v0
 coalesce(a,b,c)
 lower(name)
 ```
 
-**注**: `count(*)` のような `*` 引数は現状の文法で未サポート。`count(id)` で代用するか、将来拡張。
+**Note**: `count(*)` — using `*` as an argument — is unsupported in v0. Use
+`count(id)` or any non-null column.
 
-### 7.4 比較
+### 7.4 Comparison
 
 ```
 =  <>  !=  <  <=  >  >=
 ```
 
-### 7.5 LIKE — `%"パターン"`
+### 7.5 LIKE — `%"pattern"`
 
 ```
-?name%"john"            → name LIKE '%john%'   # 自動両側ワイルドカード
+?name%"john"            → name LIKE '%john%'   # auto two-sided wildcards
 ?name%"j%"              → name LIKE 'j%'
 ?name%"%n"              → name LIKE '%n'
-?name%"%john%"          → name LIKE '%john%'   # 既に%があれば素通し
+?name%"%john%"          → name LIKE '%john%'   # already has %, passes through
 ```
 
-ルール: クォート内に `%` が**含まれていなければ**両側に `%` を補う。**含まれていればそのまま**。
+Rule: if the quoted pattern contains **no `%`**, sql-emmet wraps it on both
+sides. If it already contains `%`, it's passed through unchanged.
 
-### 7.6 IN — `列[...]`
+### 7.6 IN — `column[...]`
 
-`[ ]` の中身は3形態のいずれか:
+The contents of `[ ]` take one of three forms:
 
-| 形態 | 構文 | 展開 |
+| Form | Syntax | Expansion |
 |---|---|---|
-| **リテラルリスト** | `?col[1,2,3]` | `col IN (1, 2, 3)` |
-| **テーブル/CTE参照** | `?col[name]` | `col IN (SELECT * FROM name)` |
-| **サブクエリ** | `?col[(subq)]` | `col IN (subq展開後のSQL)` |
+| **Literal list** | `?col[1,2,3]` | `col IN (1, 2, 3)` |
+| **Table / CTE reference** | `?col[name]` | `col IN (SELECT * FROM name)` |
+| **Subquery** | `?col[(subq)]` | `col IN (subq compiled to SQL)` |
 
 ```
 ?status[1,2,3]                  → status IN (1, 2, 3)
@@ -331,18 +335,21 @@ lower(name)
                                 → id IN (SELECT user_id FROM audits WHERE action = 'login')
 ```
 
-**ルール**:
-- リテラルリストの要素は数値か文字列のみ。リテラルと識別子の混在は不可（パース失敗）
-- テーブル/CTE参照は単一の裸識別子のみ。`[t.col]` は不可（`[(t>col)]` を使う）
-- サブクエリは `( ... )` で範囲明示。中に CTE もネスト可能
+**Rules**:
+- Literal-list elements must be number or string. Mixing literals with
+  identifiers fails the parse
+- The reference form takes a single bare identifier. `[t.col]` is not allowed
+  — use `[(t>col)]` instead
+- The subquery form uses `( ... )` to delimit the inner query. Nested CTEs
+  are allowed inside
 
 ---
 
-## 8. スキーマ連携
+## 8. Schema integration
 
-`expand(src, { schema })` の `schema` には `SchemaResolver` を渡す。
+`expand(src, { schema })` accepts a `SchemaResolver` for `schema`.
 
-### 8.1 Resolver インターフェース
+### 8.1 Resolver interface
 
 ```ts
 interface JoinPathStep {
@@ -352,31 +359,34 @@ interface JoinPathStep {
 }
 
 interface SchemaResolver {
-  // (from→to) のJOIN経路。直接FKなら length=1、多段なら>1
+  // Path of JOINs from `from` to `to`. length=1 for a direct FK,
+  // larger for multi-hop.
   resolveJoin(from: string, to: string): JoinPathStep[] | null;
 
-  // テーブルの列名一覧
+  // Column names of the named table.
   listColumns(table: string): string[] | null;
 
-  // 全テーブル列挙（候補補完で使用、optional）
+  // Optional: enumerate all known tables (used for completion).
   listTables?(): string[] | null;
 }
 ```
 
-ホスト側で実装するか、`staticResolver(schema)` で静的構成から生成。
+The host implements this directly, or builds one from a static description
+via `staticResolver(schema)`.
 
-### 8.2 FK 自動解決
+### 8.2 FK auto-resolve
 
-ON句省略時、Resolver からFKを引いて補う:
+When ON is omitted, the Resolver supplies it:
 
 ```
 users@u+orders@o
 → ... INNER JOIN orders o ON u.id = o.user_id
 ```
 
-### 8.3 多段 JOIN 推論
+### 8.3 Multi-hop JOIN inference
 
-直接 FK が無いとき、`resolveJoin` がパスを返せば中間 JOIN を自動挿入:
+If no direct FK exists but `resolveJoin` returns a multi-step path,
+intermediate JOINs are spliced in:
 
 ```
 users+items
@@ -384,150 +394,168 @@ users+items
       INNER JOIN items ON orders.id = items.order_id
 ```
 
-- 中間 JOIN は常に **INNER**
-- ユーザ指定の JOIN 型（`+<` 等）は**最終ステップにのみ**適用
-- ユーザ指定のエイリアスは**最終ステップにのみ**付与
+- Intermediate JOINs are always **INNER**
+- The user-specified JOIN type (`+<` etc.) applies **only to the final step**
+- The user-specified alias (if any) is attached **only to the final step**
 
-### 8.4 暗黙の列 qualify
+### 8.4 Implicit column qualification
 
-複数テーブルが scope にある状態で、bare な列が**1つのテーブルにしか存在しない**場合、自動で修飾:
+When multiple tables are in scope and a bare column exists in **exactly one**
+of them, the compiler qualifies it automatically:
 
 ```
 users+orders?total>1000
-→ ... WHERE orders.total > 1000     # totalはordersのみ
+→ ... WHERE orders.total > 1000     # `total` exists only on orders
 ```
 
-両テーブルにある列は**そのまま** (`created_at` 等)。`validate()` で曖昧警告を出す。
+Columns that exist on multiple tables are **left bare** (e.g.
+`created_at`); `validate()` flags them as ambiguous.
 
-### 8.5 検証 — `validate(ast, schema)`
+### 8.5 Validation — `validate(ast, schema)`
 
-`ValidationIssue[]` を返す。位置情報は v0 では未実装（名前ベース）。
+Returns `ValidationIssue[]`. Source-position info is not yet tracked
+(name-based references only).
 
-検出する問題:
-- 未知のテーブル
-- 既知テーブル上の未知の列
-- 複数テーブルにまたがる曖昧な bare 列
-- 未知のテーブル/エイリアス参照（qualified IDの先頭）
+Detected problems:
+- Unknown table
+- Unknown column on a known table
+- Ambiguous bare column across tables in scope
+- Reference to an unknown table or alias (head of a qualified id)
 
-### 8.6 候補列挙 — `getCandidates(input, cursor, schema)`
+### 8.6 Candidates — `getCandidates(input, cursor, schema)`
 
-カーソル位置の文脈に応じて候補を返す。**UXは決めない**（ホスト責務）。
+Returns the relevant candidates for the cursor position. **UX is not
+prescribed** — that's the host's responsibility.
 
-| 直前トークン | 候補種別 |
+| Token before cursor | Candidate kind |
 |---|---|
-| 文頭 / `+` / `-` / `(` 直後 | テーブル |
-| `>` `?` `:` `#` `$` `,` `<` `\|` `=` `[` 直後 | 列（scope内テーブル） |
-| `識別子.` 直後 | その識別子のテーブル/エイリアスの列 |
-| `@` 直後 | （候補なし — エイリアス命名中） |
+| Start / `+` / `-` / `(` | tables |
+| `>` `?` `:` `#` `$` `,` `<` `\|` `=` `[` | columns (in-scope tables) |
+| `<ident>.` | columns of that table or alias |
+| `@` | (no candidates — naming an alias) |
 
-`longestCommonPrefix(candidates)` ヘルパで Tab 前置一致展開を実装可能。
+`longestCommonPrefix(candidates)` is provided as a helper for
+Tab-style prefix expansion.
 
 ---
 
-## 9. パース時の文脈ルール（実装メモ）
+## 9. Parse-time context rules (impl notes)
 
-### 9.1 同記号の多義性
+### 9.1 Symbol multi-use
 
-| 記号 | 文脈 | 意味 |
+| Symbol | Context | Meaning |
 |---|---|---|
-| `+` | 文頭 | INSERT動詞 |
-| `+` | テーブル参照後・節中 | JOIN |
-| `+` | OrderItem内 | ASC修飾 |
-| `-` | 文頭 | DELETE動詞 |
-| `-` | OrderItem内 | DESC修飾 |
-| `-` | 数値リテラル先頭 | 負号 |
-| `=` | 文頭 | UPDATE動詞 |
-| `=` | 式中 | 比較演算子 |
-| `=` | SET節中 | 代入 |
-| `<` | 動詞後 | VALUES/SET導入 |
-| `<` | JoinType | LEFT |
-| `<` | 式中 | 比較 |
-| `>` | テーブル参照後 | SELECT列リスト |
-| `>` | JoinType | RIGHT |
-| `>` | 式中 | 比較 |
-| `[ ]` | JOIN後 | ON句 |
-| `[ ]` | 列の直後 | IN |
-| `( )` | テーブル後・<前 | INSERT列リスト |
-| `( )` | <の後 | サブクエリ |
-| `( )` | 式中 | グルーピング |
-| `{ }` | 文頭 | CTE |
-| `{ }` | <の後 | INSERT行ブロック |
-| `,` | 式中（WHERE/HAVING） | AND |
-| `,` | リスト中（SELECT/GROUP/ORDER等） | 区切り |
-| `,` | CTE末尾と主クエリの間 | 任意の区切り（無くてもよい） |
-| `*` | SELECT列の単独 | 全列 |
-| `*` | `<ident>.<*>` | qualified star（そのテーブル全列） |
-| `*` | JoinType | FULL JOIN |
+| `+` | start of statement | INSERT verb |
+| `+` | after table-ref / between clauses | JOIN |
+| `+` | inside an OrderItem | ASC marker |
+| `-` | start of statement | DELETE verb |
+| `-` | inside an OrderItem | DESC marker |
+| `-` | leading a number literal | unary minus |
+| `=` | start of statement | UPDATE verb |
+| `=` | inside an expression | comparison operator |
+| `=` | inside a SET clause | assignment |
+| `<` | after a verb | introduces VALUES/SET |
+| `<` | inside a JoinType | LEFT |
+| `<` | inside an expression | comparison |
+| `>` | after a table-ref | SELECT column list |
+| `>` | inside a JoinType | RIGHT |
+| `>` | inside an expression | comparison |
+| `[ ]` | after a JOIN | ON clause |
+| `[ ]` | after a column | IN |
+| `( )` | between a verb-table and `<` | INSERT column list |
+| `( )` | after `<` | subquery |
+| `( )` | inside an expression | grouping |
+| `{ }` | start of statement | CTE |
+| `{ }` | after `<` | INSERT row block |
+| `,` | inside a WHERE/HAVING expression | AND |
+| `,` | inside a list (SELECT/GROUP/ORDER/etc.) | separator |
+| `,` | between the CTE block and main query | optional separator |
+| `*` | as a single SELECT item | all columns |
+| `*` | as `<ident>.*` | qualified star |
+| `*` | inside a JoinType | FULL JOIN |
 
-### 9.2 リテラル
+### 9.2 Literals
 
-- 文字列: `"..."`（必須）
-- 数値: 整数 or 小数
+- Strings: `"..."` (mandatory)
+- Numbers: integer or float
 
-数値以外のリテラル（`true` `false` `null`）は v0 未対応。
+Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
 
 ---
 
-## 10. v0 の未対応・既知の制約
+## 10. v0 limitations
 
-| 項目 | 状態 | 備考 |
+| Item | Status | Notes |
 |---|---|---|
-| 式中の算術（`a+b`, `a*2`） | 未対応 | SET 右辺の `+= -= *= /=` のみ可 |
-| `count(*)` の `*` 引数 | 未対応 | `count(id)` で代用 |
-| `IS NULL` / `IS NOT NULL` | 未対応 | |
-| `BETWEEN` | 未対応 | `?x>=a,x<=b` で代用 |
-| `true`/`false`/`null` リテラル | 未対応 | |
-| UPDATE/DELETE の JOIN | 未対応 | |
-| IN以外の場所での相関サブクエリ | 未対応 | IN内は `[(subq)]` で対応済 |
-| 複数CTE のテストカバレッジ | 薄い | 文法は対応 |
-| validate の位置情報 | 未対応 | 名前のみ返す |
-| `BETWEEN`/`IS NULL` 等の独自短縮 | 未設計 | |
-| UNION / UNION ALL | 未対応 | |
-| WINDOW 関数 | 未対応 | |
-| DISTINCT | 未対応 | |
+| Arithmetic in expressions (`a+b`, `a*2`) | Not supported | Only `+= -= *= /=` on the SET right-hand side |
+| `count(*)` `*` argument | Not supported | Use `count(id)` |
+| `IS NULL` / `IS NOT NULL` | Not supported | |
+| `BETWEEN` | Not supported | Use `?x>=a,x<=b` |
+| `true` / `false` / `null` literals | Not supported | |
+| JOINs in UPDATE / DELETE | Not supported | |
+| Correlated subqueries outside IN | Not supported | IN supports `[(subq)]` |
+| Multi-CTE test coverage | Thin | Grammar supports it |
+| Source positions in `validate` | Not supported | Names only |
+| Shorthand for `BETWEEN` / `IS NULL` | Not designed | |
+| UNION / UNION ALL | Not supported | |
+| Window functions | Not supported | |
+| DISTINCT | Not supported | |
 
 ---
 
-## 11. 設計上の決定事項アーカイブ
+## 11. Design rationale archive
 
-会話で決まった「なぜそうしたか」のメモ。将来揺り戻されないように残す。
+Notes on "why this way" that came out of the design discussions, kept here
+to prevent re-litigation later.
 
-- **`+` を INSERT動詞に**: `-` (DELETE) との視覚的対称性。SQL に文頭 `+` は無いので衝突なし
-- **`{}` を行ブロック、`()` を列リスト**: `()` は SQL ネイティブ記法と一致。`{}` は「ブロック」一意の意味に純化
-- **SET右辺のみ複合代入**: 式全体への算術導入を避けつつ実用ケース（カウンタ）を救う
-- **DELETE WHERE 必須化しない**: 構文の責務を逸脱。安全装置はホスト
-- **LIKE はクォート内 `%`**: リテラルとしての一貫性。`c1%n` 系の裸記法は `%` の位置と意味が逆転して直感に反する
-- **`~20p3` の `p` 接尾辞**: `/` だと「20分の3」に読まれる懸念があった
-- **AND は `,`、OR は `\|`**: AND が圧倒的多数なので短い記号を割り当て
-- **スキーマ非所有**: sql-emmet は問い合わせ口だけ。データ取得・キャッシュ・型管理はホスト責務
-- **補完ポップアップ非実装**: Emmet ユーザにはポップアップが邪魔。Tab前置一致と Ctrl+Space を経路として用意し、UI 判断はホスト
+- **`+` as INSERT verb**: visual symmetry with `-` (DELETE). SQL has no
+  leading `+`, so there's no clash
+- **`{}` for row blocks, `()` for column lists**: `()` matches SQL native
+  syntax. `{}` is left meaning purely "block"
+- **Compound assignment limited to SET RHS**: avoids opening up arithmetic
+  in all expressions while still covering the common counter case
+- **DELETE doesn't require WHERE at the syntax level**: that's a runtime
+  policy, not a grammar concern
+- **LIKE uses `%` inside quotes**: keeps literal handling consistent. The
+  bare-`%` form had an inverted relationship to the SQL `%` position, which
+  was confusing
+- **`~20p3` with the `p` suffix**: `/` was confusing because `1/20` reads
+  like a fraction
+- **`,` for AND, `|` for OR**: AND is overwhelmingly more common, so it
+  gets the shorter symbol
+- **Schema is not owned by sql-emmet**: the package is pure shorthand
+  expansion. Schema fetching, caching, type tracking are all the host's job
+- **No autocomplete popup**: popups break the typing rhythm Emmet exists
+  for. Tab prefix-expansion and Ctrl+Space are exposed as inputs to the
+  host; UI choices stay with the host
 
-### 11.1 演算子の語呂シート
+### 11.1 Operator mnemonics
 
-「なんでこの記号？」と未来の自分が悩んだ時のメモ。記号選定の背景。
+A cheat sheet for "why this character?" so future-self doesn't have to
+re-derive it.
 
-| 記号 | 由来 |
+| Symbol | Origin |
 |---|---|
-| `$` | **$** の字形は **S** が下敷き → **s**ort（ORDER BY） |
-| `?` | "what?" → 問い合わせ条件（WHERE） |
-| `%` | SQLの `%` ワイルドカードそのまま（LIKE） |
-| `#` | hash/タグ → クラスタ化（GROUP BY） |
-| `:` | 「〜という性質を持つもの」のラベル（HAVING） |
-| `@` | "at" → エイリアスのアドレス |
-| `+` / `-` | 加算/減算 → 行追加/削除（INSERT/DELETE） |
-| `=` | 代入 → 値の更新（UPDATE） |
-| `>` | データを射出する向き（SELECT列） |
-| `<` | データを流し込む向き（INSERT/UPDATE のVALUES/SET導入） |
-| `~` | 「だいたい N 件」の感じ（LIMIT） |
-| `\|` | パイプ → 論理和（OR） |
-| `,` | 列挙 → AND と区切り |
-| `{}` | グループブロック（CTE / 行ブロック） |
-| `[]` | 添え字感 → IN リスト ／ ON マッピング |
-| `()` | 通常の式グルーピング ／ サブクエリ ／ INSERT列リスト |
+| `$` | The shape of `$` is **S** with a stroke → **s**ort (ORDER BY) |
+| `?` | "what?" → query condition (WHERE) |
+| `%` | The SQL `%` wildcard, reused literally (LIKE) |
+| `#` | hash / tag → clustering (GROUP BY) |
+| `:` | "with this property" — labels (HAVING) |
+| `@` | "at" → an alias address |
+| `+` / `-` | add/remove → row insert/delete |
+| `=` | assignment → row update |
+| `>` | data flowing out (SELECT columns) |
+| `<` | data flowing in (INSERT/UPDATE VALUES/SET intro) |
+| `~` | "approximately N" feel (LIMIT) |
+| `\|` | pipe → logical OR |
+| `,` | enumeration → AND / list separator |
+| `{}` | block of grouped items (CTE / row block) |
+| `[]` | subscript-like → IN list / ON mapping |
+| `()` | regular grouping / subquery / INSERT column list |
 
 ---
 
-## 12. 公開API
+## 12. Public API
 
 ```ts
 import {
