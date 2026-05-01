@@ -1,0 +1,18 @@
+{
+  "name": "sql-emmet-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "npm --prefix .. run build:grammar",
+    "prebuild": "npm --prefix .. run build:grammar",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "monaco-editor": "^0.49.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}

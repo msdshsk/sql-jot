@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>sql-emmet — live preview</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <h1>sql-emmet</h1>
+        <span class="hint">
+          live preview · <kbd>Tab</kbd> prefix-expand · <kbd>Ctrl</kbd>+<kbd>E</kbd> expand inline
+        </span>
+      </div>
+      <nav id="examples" class="examples"></nav>
+    </header>
+    <main>
+      <section class="pane">
+        <div class="pane-label">emmet</div>
+        <div id="emmet-editor" class="editor"></div>
+      </section>
+      <section class="pane">
+        <div class="pane-label">sql</div>
+        <div id="sql-editor" class="editor"></div>
+      </section>
+    </main>
+    <footer id="status" class="status status-ok">ready</footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+src/parser.generated.js
+src/parser.generated.d.ts
+*.log
+*.tsbuildinfo
+.vite/
+.DS_Store

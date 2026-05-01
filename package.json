@@ -1,0 +1,37 @@
+{
+  "name": "sql-emmet",
+  "version": "0.0.1",
+  "description": "Emmet-like shorthand syntax that expands into SQL",
+  "author": "msd.shsk <msd.shsk@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "SYNTAX.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build:grammar": "peggy --format es --dts -o src/parser.generated.js src/grammar.peggy",
+    "build": "npm run build:grammar && tsc",
+    "test": "npm run build:grammar && vitest run",
+    "test:watch": "npm run build:grammar && vitest",
+    "prepare": "npm run build:grammar"
+  },
+  "keywords": [
+    "sql",
+    "emmet",
+    "shorthand",
+    "monaco",
+    "dsl",
+    "query-builder"
+  ],
+  "devDependencies": {
+    "peggy": "^4.0.3",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.12.7"
+  }
+}
