@@ -1,5 +1,5 @@
 {
-  "name": "sql-emmet",
+  "name": "sql-jot",
   "version": "0.0.1",
   "description": "Emmet-like shorthand syntax that expands into SQL",
   "author": "msd.shsk <msd.shsk@gmail.com>",

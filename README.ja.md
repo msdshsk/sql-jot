@@ -1,4 +1,4 @@
-# sql-emmet
+# sql-jot
 
 > [English](README.md) | 日本語
 
@@ -17,7 +17,7 @@ ORDER BY x DESC
 
 ## 動機
 
-SQLクライアントは機能盛りで重くなりがち。sql-emmet は逆方向で、
+SQLクライアントは機能盛りで重くなりがち。sql-jot は逆方向で、
 ウィザードより記号で叩きたい打鍵派の少数向けに作っています。
 
 SQL の代替言語**ではありません**。標準SQLにコンパイルされるので、
@@ -26,11 +26,11 @@ SQL の代替言語**ではありません**。標準SQLにコンパイルされ
 ## 使い方
 
 ```bash
-npm install sql-emmet
+npm install sql-jot
 ```
 
 ```ts
-import { expand } from "sql-emmet";
+import { expand } from "sql-jot";
 
 expand("users@u>u.name?u.id=1");
 // → "SELECT u.name FROM users u WHERE u.id = 1"
@@ -64,12 +64,12 @@ expand("=users<count+=1?id=5");
 
 ## スキーマ連携
 
-sql-emmet はスキーマを所有しません。ホストアプリが小さな Resolver を
-提供すると、sql-emmet がそれを呼んで FK 自動解決・多段 JOIN 推論・暗黙の
+sql-jot はスキーマを所有しません。ホストアプリが小さな Resolver を
+提供すると、sql-jot がそれを呼んで FK 自動解決・多段 JOIN 推論・暗黙の
 列修飾・検証・補完を行います。
 
 ```ts
-import { expand, staticResolver } from "sql-emmet";
+import { expand, staticResolver } from "sql-jot";
 
 const schema = staticResolver({
   tables: [
@@ -103,7 +103,7 @@ import {
   getCandidates,          // カーソル位置の候補
   longestCommonPrefix,    // Tab前置一致展開用ヘルパ
   staticResolver,         // 静的スキーマから SchemaResolver を構築
-} from "sql-emmet";
+} from "sql-jot";
 ```
 
 補完APIは **UX非依存**：候補を返すだけで、ポップアップ／インラインゴース

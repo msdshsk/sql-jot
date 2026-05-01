@@ -1,9 +1,9 @@
 import * as monaco from "monaco-editor";
 
 export function registerSqlEmmetLanguage() {
-  monaco.languages.register({ id: "sql-emmet" });
+  monaco.languages.register({ id: "sql-jot" });
 
-  monaco.languages.setMonarchTokensProvider("sql-emmet", {
+  monaco.languages.setMonarchTokensProvider("sql-jot", {
     defaultToken: "",
     tokenizer: {
       root: [
@@ -21,7 +21,7 @@ export function registerSqlEmmetLanguage() {
     },
   });
 
-  monaco.editor.defineTheme("sql-emmet-dark", {
+  monaco.editor.defineTheme("sql-jot-dark", {
     base: "vs-dark",
     inherit: true,
     rules: [

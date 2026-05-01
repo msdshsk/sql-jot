@@ -29,8 +29,8 @@ const initial = EXAMPLES[0]!.source;
 
 const emmetEditor = monaco.editor.create(emmetEl, {
   value: initial,
-  language: "sql-emmet",
-  theme: "sql-emmet-dark",
+  language: "sql-jot",
+  theme: "sql-jot-dark",
   fontSize: 14,
   fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
   minimap: { enabled: false },
@@ -68,7 +68,7 @@ function setStatus(text: string, ok: boolean) {
 
 /* ---------- live preview + validation (Pattern A: red squiggles) ---------- */
 
-const MARKER_OWNER = "sql-emmet";
+const MARKER_OWNER = "sql-jot";
 
 function refresh() {
   const model = emmetEditor.getModel();
@@ -185,8 +185,8 @@ emmetEditor.onKeyDown((e) => {
 /* ---------- Inline expand command (Ctrl+E unchanged) ---------- */
 
 emmetEditor.addAction({
-  id: "sql-emmet.expand-inline",
-  label: "Expand sql-emmet inline",
+  id: "sql-jot.expand-inline",
+  label: "Expand sql-jot inline",
   keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE],
   run: (ed) => {
     const src = ed.getValue().trim();

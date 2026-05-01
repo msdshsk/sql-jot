@@ -129,7 +129,7 @@ export interface JoinPathStep {
 
 /**
  * Pluggable schema lookup interface. The host (e.g. an SQL client) implements
- * this to expose its schema knowledge to sql-emmet without giving up ownership
+ * this to expose its schema knowledge to sql-jot without giving up ownership
  * of how the schema is stored or fetched.
  *
  * All methods return `null` when the resolver has no answer; the compiler

@@ -1,10 +1,10 @@
-# sql-emmet syntax reference
+# sql-jot syntax reference
 
 > English | [日本語](SYNTAX.ja.md)
 
 Last updated: 2026-05-01
 
-This document covers the full grammar and semantics of sql-emmet as currently
+This document covers the full grammar and semantics of sql-jot as currently
 implemented. If the implementation and this doc disagree, **the implementation
 wins** — fix the doc.
 
@@ -314,7 +314,7 @@ lower(name)
 ?name%"%john%"          → name LIKE '%john%'   # already has %, passes through
 ```
 
-Rule: if the quoted pattern contains **no `%`**, sql-emmet wraps it on both
+Rule: if the quoted pattern contains **no `%`**, sql-jot wraps it on both
 sides. If it already contains `%`, it's passed through unchanged.
 
 ### 7.6 IN — `column[...]`
@@ -523,7 +523,7 @@ to prevent re-litigation later.
   like a fraction
 - **`,` for AND, `|` for OR**: AND is overwhelmingly more common, so it
   gets the shorter symbol
-- **Schema is not owned by sql-emmet**: the package is pure shorthand
+- **Schema is not owned by sql-jot**: the package is pure shorthand
   expansion. Schema fetching, caching, type tracking are all the host's job
 - **No autocomplete popup**: popups break the typing rhythm Emmet exists
   for. Tab prefix-expansion and Ctrl+Space are exposed as inputs to the
@@ -566,12 +566,12 @@ import {
   getCandidates,           // (input, cursor, schema) => CandidatesResult
   longestCommonPrefix,     // (string[]) => string
   staticResolver,          // (StaticSchema) => SchemaResolver
-} from "sql-emmet";
+} from "sql-jot";
 
 import type {
   Query, MainQuery, Expr, Join, TableRef,
   CompileOptions, SchemaResolver, JoinPathStep,
   Candidate, CandidatesResult, ValidationIssue,
   StaticSchema, StaticTable, StaticForeignKey,
-} from "sql-emmet";
+} from "sql-jot";
 ```

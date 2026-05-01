@@ -1,10 +1,10 @@
-# sql-emmet 構文リファレンス
+# sql-jot 構文リファレンス
 
 > [English](SYNTAX.md) | 日本語
 
 最後にまとめた日: 2026-05-01
 
-このドキュメントは、現状実装されている sql-emmet の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
+このドキュメントは、現状実装されている sql-jot の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
 
 ---
 
@@ -501,7 +501,7 @@ users+orders?total>1000
 - **LIKE はクォート内 `%`**: リテラルとしての一貫性。`c1%n` 系の裸記法は `%` の位置と意味が逆転して直感に反する
 - **`~20p3` の `p` 接尾辞**: `/` だと「20分の3」に読まれる懸念があった
 - **AND は `,`、OR は `\|`**: AND が圧倒的多数なので短い記号を割り当て
-- **スキーマ非所有**: sql-emmet は問い合わせ口だけ。データ取得・キャッシュ・型管理はホスト責務
+- **スキーマ非所有**: sql-jot は問い合わせ口だけ。データ取得・キャッシュ・型管理はホスト責務
 - **補完ポップアップ非実装**: Emmet ユーザにはポップアップが邪魔。Tab前置一致と Ctrl+Space を経路として用意し、UI 判断はホスト
 
 ### 11.1 演算子の語呂シート
@@ -540,12 +540,12 @@ import {
   getCandidates,           // (input, cursor, schema) => CandidatesResult
   longestCommonPrefix,     // (string[]) => string
   staticResolver,          // (StaticSchema) => SchemaResolver
-} from "sql-emmet";
+} from "sql-jot";
 
 import type {
   Query, MainQuery, Expr, Join, TableRef,
   CompileOptions, SchemaResolver, JoinPathStep,
   Candidate, CandidatesResult, ValidationIssue,
   StaticSchema, StaticTable, StaticForeignKey,
-} from "sql-emmet";
+} from "sql-jot";
 ```

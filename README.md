@@ -1,4 +1,4 @@
-# sql-emmet
+# sql-jot
 
 > English | [日本語](README.ja.md)
 
@@ -17,7 +17,7 @@ ORDER BY x DESC
 
 ## Why
 
-SQL clients tend to grow heavy with features. sql-emmet is the opposite —
+SQL clients tend to grow heavy with features. sql-jot is the opposite —
 a one-line shorthand for the keystroke-bound minority who'd rather type
 sigils than walk through wizards.
 
@@ -27,11 +27,11 @@ or tool can run.
 ## Quick start
 
 ```bash
-npm install sql-emmet
+npm install sql-jot
 ```
 
 ```ts
-import { expand } from "sql-emmet";
+import { expand } from "sql-jot";
 
 expand("users@u>u.name?u.id=1");
 // → "SELECT u.name FROM users u WHERE u.id = 1"
@@ -65,12 +65,12 @@ The complete reference is in [SYNTAX.md](SYNTAX.md).
 
 ## Schema integration
 
-sql-emmet doesn't own your schema. The host application provides a small
-resolver and sql-emmet uses it for FK auto-resolution, multi-hop JOIN
+sql-jot doesn't own your schema. The host application provides a small
+resolver and sql-jot uses it for FK auto-resolution, multi-hop JOIN
 inference, implicit column qualification, validation and completion.
 
 ```ts
-import { expand, staticResolver } from "sql-emmet";
+import { expand, staticResolver } from "sql-jot";
 
 const schema = staticResolver({
   tables: [
@@ -104,7 +104,7 @@ import {
   getCandidates,          // cursor-position completion candidates
   longestCommonPrefix,    // helper for Tab-style prefix expansion
   staticResolver,         // build a SchemaResolver from a static schema
-} from "sql-emmet";
+} from "sql-jot";
 ```
 
 The completion API is **UX-agnostic**: it returns candidates and the host

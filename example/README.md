@@ -1,6 +1,6 @@
-# sql-emmet example
+# sql-jot example
 
-Live demo of `sql-emmet` running inside a Monaco editor.
+Live demo of `sql-jot` running inside a Monaco editor.
 
 ## Run
 
@@ -19,5 +19,5 @@ Open http://localhost:5173.
 - **Ctrl+E** in the left pane: expand the shorthand inline (replaces input with SQL)
 - **Quick-load buttons** at the top: pre-canned examples
 
-The example imports `sql-emmet` directly from `../src/`, so changes to the
+The example imports `sql-jot` directly from `../src/`, so changes to the
 parser/compiler are picked up by Vite HMR.
