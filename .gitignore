@@ -6,3 +6,4 @@ src/parser.generated.d.ts
 *.tsbuildinfo
 .vite/
 .DS_Store
+.npmrc
