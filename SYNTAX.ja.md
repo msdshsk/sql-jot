@@ -431,9 +431,62 @@ users+orders?total>1000
 
 ---
 
-## 9. パース時の文脈ルール（実装メモ）
+## 9. SQL出力の方言
 
-### 9.1 同記号の多義性
+コンパイラは **PostgreSQL / MySQL / SQLite 風**のSQLを既定で出力する。多くの句はSQL-92/99 標準だが、1か所だけ方言依存があります。
+
+### 9.1 標準準拠の機能
+
+| 機能 | 標準 |
+|---|---|
+| `SELECT ... FROM ... WHERE ...` | SQL-92 |
+| `INNER / LEFT / RIGHT / FULL / CROSS JOIN` | SQL-92 |
+| `WITH ... AS (...)` (CTE) | SQL:1999 |
+| `IN (subquery)` | SQL-92 |
+| `LIKE '%...%'` | SQL-92 |
+| 複数行 `VALUES (a),(b)` | SQL:2003 (Oracle pre-23 は非対応) |
+| `INSERT ... SELECT ...` | SQL-92 |
+
+### 9.2 方言依存の出力
+
+**`LIMIT n OFFSET m`** が唯一の方言依存箇所:
+
+| DB | ネイティブ表現 |
+|---|---|
+| PostgreSQL / MySQL / SQLite | `LIMIT 20 OFFSET 40` ←sql-jotの既定 |
+| SQL Server (2012+) | `OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY` |
+| Oracle (12c+) | `OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY` |
+| SQL:2008 標準 | `OFFSET 40 ROWS FETCH FIRST 20 ROWS ONLY` |
+
+### 9.3 `paginate` フックで切り替え
+
+`CompileOptions.paginate` でLIMITの出力を方言ごとに差し替え可能:
+
+```ts
+expand("users~20p3", {
+  paginate: ({ limit, page }) => {
+    const offset = (page - 1) * limit;
+    return `OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  },
+});
+// → "... OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY"
+```
+
+### 9.4 現状未対応の方言差
+
+- **真偽値リテラル**（`TRUE` / `FALSE` PG / MySQL、`1` / `0` SQL Server）：sql-jotは真偽値専用リテラルを持たない。bare identifier扱いなので実行時にDB側が解決
+- **文字列連結**（`||` 標準、`+` SQL Server、`CONCAT()` MySQLレガシー）：未対応
+- **識別子クォート**（`"x"` PG、`` `x` `` MySQL、`[x]` SQL Server）：sql-jotは識別子を裸で出力。予約語衝突時は方言間移植で問題になる可能性
+
+### 9.5 将来の拡張余地
+
+LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres" | "mysql" | "sqlserver" | "oracle"` で一括切替を導入予定。現状はpaginateフックで実用上十分。
+
+---
+
+## 10. パース時の文脈ルール（実装メモ）
+
+### 10.1 同記号の多義性
 
 | 記号 | 文脈 | 意味 |
 |---|---|---|
@@ -466,7 +519,7 @@ users+orders?total>1000
 | `*` | `<ident>.<*>` | qualified star（そのテーブル全列） |
 | `*` | JoinType | FULL JOIN |
 
-### 9.2 リテラル
+### 10.2 リテラル
 
 - 文字列: `"..."`（必須）
 - 数値: 整数 or 小数
@@ -475,7 +528,7 @@ users+orders?total>1000
 
 ---
 
-## 10. v0 の未対応・既知の制約
+## 11. v0 の未対応・既知の制約
 
 | 項目 | 状態 | 備考 |
 |---|---|---|
@@ -495,7 +548,7 @@ users+orders?total>1000
 
 ---
 
-## 11. 設計上の決定事項アーカイブ
+## 12. 設計上の決定事項アーカイブ
 
 会話で決まった「なぜそうしたか」のメモ。将来揺り戻されないように残す。
 
@@ -509,7 +562,7 @@ users+orders?total>1000
 - **スキーマ非所有**: sql-jot は問い合わせ口だけ。データ取得・キャッシュ・型管理はホスト責務
 - **補完ポップアップ非実装**: Emmet ユーザにはポップアップが邪魔。Tab前置一致と Ctrl+Space を経路として用意し、UI 判断はホスト
 
-### 11.1 演算子の語呂シート
+### 12.1 演算子の語呂シート
 
 「なんでこの記号？」と未来の自分が悩んだ時のメモ。記号選定の背景。
 
@@ -534,7 +587,7 @@ users+orders?total>1000
 
 ---
 
-## 12. 公開API
+## 13. 公開API
 
 ```ts
 import {

@@ -131,7 +131,7 @@ quick-load samples, validation markers and `Tab` prefix expansion.
 
 v0.0.1. The core covers SELECT/INSERT/UPDATE/DELETE, CTE, JOINs (INNER/
 LEFT/RIGHT/FULL/CROSS), schema-driven JOIN inference, three-way IN, and
-qualified-star. See [SYNTAX.md §10](SYNTAX.md#10-v0-limitations) for
+qualified-star. See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for
 unimplemented features.
 
 ## Development

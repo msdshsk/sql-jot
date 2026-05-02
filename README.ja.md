@@ -129,7 +129,7 @@ npm run dev
 
 v0.0.1。SELECT/INSERT/UPDATE/DELETE、CTE、JOIN（INNER/LEFT/RIGHT/FULL/
 CROSS）、スキーマ駆動の JOIN 推論、3形態の IN、qualified star をカバー。
-未対応項目は [SYNTAX.ja.md §10](SYNTAX.ja.md#10-v0-の未対応既知の制約) を参照。
+未対応項目は [SYNTAX.ja.md §11](SYNTAX.ja.md#11-v0-の未対応既知の制約) を参照。
 
 ## 開発
 

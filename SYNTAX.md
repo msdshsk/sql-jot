@@ -446,9 +446,66 @@ Tab-style prefix expansion.
 
 ---
 
-## 9. Parse-time context rules (impl notes)
+## 9. SQL output dialect
 
-### 9.1 Symbol multi-use
+The compiler emits SQL flavored after **PostgreSQL / MySQL / SQLite**. Most
+clauses are SQL-92/99 standard; one piece is dialect-specific.
+
+### 9.1 What's standard
+
+| Feature | Standard |
+|---|---|
+| `SELECT ... FROM ... WHERE ...` | SQL-92 |
+| `INNER / LEFT / RIGHT / FULL / CROSS JOIN` | SQL-92 |
+| `WITH ... AS (...)` (CTE) | SQL:1999 |
+| `IN (subquery)` | SQL-92 |
+| `LIKE '%...%'` | SQL-92 |
+| Multi-row `VALUES (a),(b)` | SQL:2003 (Oracle pre-23 doesn't support it) |
+| `INSERT ... SELECT ...` | SQL-92 |
+
+### 9.2 What's dialect-specific
+
+**`LIMIT n OFFSET m`** is the main divergence:
+
+| Database | Native syntax |
+|---|---|
+| PostgreSQL / MySQL / SQLite | `LIMIT 20 OFFSET 40` ← default sql-jot output |
+| SQL Server (2012+) | `OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY` |
+| Oracle (12c+) | `OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY` |
+| SQL:2008 standard | `OFFSET 40 ROWS FETCH FIRST 20 ROWS ONLY` |
+
+### 9.3 Overriding via `paginate`
+
+`CompileOptions.paginate` swaps the LIMIT emission per dialect:
+
+```ts
+expand("users~20p3", {
+  paginate: ({ limit, page }) => {
+    const offset = (page - 1) * limit;
+    return `OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  },
+});
+// → "... OFFSET 40 ROWS FETCH NEXT 20 ROWS ONLY"
+```
+
+### 9.4 Other potential differences (not currently handled)
+
+- Boolean literals (`TRUE` / `FALSE` in PG / MySQL, `1` / `0` in SQL Server) — sql-jot doesn't currently emit a dedicated boolean literal; treat them as bare identifiers and let the runtime resolve them
+- String concatenation (`||` standard, `+` in SQL Server, `CONCAT()` in MySQL legacy) — not yet supported
+- Identifier quoting (`"x"` PG, `` `x` `` MySQL, `[x]` SQL Server) — sql-jot emits identifiers bare, so reserved-word column names won't survive cross-dialect porting unmodified
+
+### 9.5 Future plan
+
+A `dialect: "postgres" | "mysql" | "sqlserver" | "oracle"` switch on
+`CompileOptions` could centralize variations once the divergence list grows
+beyond LIMIT. Not yet implemented — the `paginate` hook is sufficient for
+the current scope.
+
+---
+
+## 10. Parse-time context rules (impl notes)
+
+### 10.1 Symbol multi-use
 
 | Symbol | Context | Meaning |
 |---|---|---|
@@ -481,7 +538,7 @@ Tab-style prefix expansion.
 | `*` | as `<ident>.*` | qualified star |
 | `*` | inside a JoinType | FULL JOIN |
 
-### 9.2 Literals
+### 10.2 Literals
 
 - Strings: `"..."` (mandatory)
 - Numbers: integer or float
@@ -490,7 +547,7 @@ Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
 
 ---
 
-## 10. v0 limitations
+## 11. v0 limitations
 
 | Item | Status | Notes |
 |---|---|---|
@@ -510,7 +567,7 @@ Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
 
 ---
 
-## 11. Design rationale archive
+## 12. Design rationale archive
 
 Notes on "why this way" that came out of the design discussions, kept here
 to prevent re-litigation later.
@@ -536,7 +593,7 @@ to prevent re-litigation later.
   for. Tab prefix-expansion and Ctrl+Space are exposed as inputs to the
   host; UI choices stay with the host
 
-### 11.1 Operator mnemonics
+### 12.1 Operator mnemonics
 
 A cheat sheet for "why this character?" so future-self doesn't have to
 re-derive it.
@@ -562,7 +619,7 @@ re-derive it.
 
 ---
 
-## 12. Public API
+## 13. Public API
 
 ```ts
 import {
