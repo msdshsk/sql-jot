@@ -155,9 +155,12 @@ LimitClause
     }
 
 TableRef
-  = name:Identifier alias:("@" @Identifier)? {
+  = name:DottedName alias:("@" @Identifier)? {
       return { name, alias: alias || null };
     }
+
+DottedName
+  = $(Identifier ("." Identifier)*)
 
 ColList
   = first:ColExpr rest:(_ "," _ @ColExpr)* { return [first, ...rest]; }

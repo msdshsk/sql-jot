@@ -78,7 +78,14 @@ SQL order on output.
 ```
 users               # no alias
 users@u             # aliased as u
+public.users        # schema-qualified (PostgreSQL etc.)
+public.users@u      # schema-qualified with alias
+db.public.users     # 3-part name (cross-database refs)
 ```
+
+Dots in a table name are passed through unchanged to the SQL output, so
+schema- and database-qualified references work for any dialect that
+accepts that form.
 
 ### 4.3 SELECT column list — `>`
 

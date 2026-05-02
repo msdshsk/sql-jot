@@ -74,7 +74,12 @@
 ```
 users               # 別名なし
 users@u             # 別名 u
+public.users        # スキーマ修飾（PostgreSQL等）
+public.users@u      # スキーマ修飾＋別名
+db.public.users     # 3部構成（DB跨ぎの参照）
 ```
+
+テーブル名のドットはSQL出力にそのまま渡されるので、スキーマ・DB修飾を許す方言ならどれでも動きます。
 
 ### 4.3 SELECT列リスト `>`
 
