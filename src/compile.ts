@@ -370,12 +370,33 @@ function emitExpr(e: Expr, home: ColumnHome): string {
       return String(e.value);
     case "str":
       return sqlString(e.value);
+    case "null":
+      return "NULL";
+    case "bool":
+      return currentOptions.bool
+        ? currentOptions.bool(e.value)
+        : e.value
+          ? "TRUE"
+          : "FALSE";
     case "func":
       return `${e.name}(${e.args.map((a) => emitExpr(a, home)).join(", ")})`;
     case "group":
       return `(${emitExpr(e.expr, home)})`;
-    case "compare":
+    case "compare": {
+      // Rewrite null comparisons to IS NULL / IS NOT NULL.
+      const nullSide =
+        e.left.type === "null"
+          ? "left"
+          : e.right.type === "null"
+            ? "right"
+            : null;
+      if (nullSide && (e.op === "=" || e.op === "<>" || e.op === "!=")) {
+        const operand = nullSide === "left" ? e.right : e.left;
+        const negate = e.op !== "=";
+        return `${emitExpr(operand, home)} ${negate ? "IS NOT NULL" : "IS NULL"}`;
+      }
       return `${emitExpr(e.left, home)} ${e.op} ${emitExpr(e.right, home)}`;
+    }
     case "like":
       return emitLike(e, home, "LIKE");
     case "in":

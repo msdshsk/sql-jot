@@ -2,7 +2,7 @@
 
 > English | [日本語](SYNTAX.ja.md)
 
-Last updated: 2026-05-04 (RETURNING / CASE)
+Last updated: 2026-05-04 (RETURNING / CASE / null+bool literals)
 
 This document covers the full grammar and semantics of sql-jot as currently
 implemented. If the implementation and this doc disagree, **the implementation
@@ -331,7 +331,52 @@ Returning an empty string from the hook suppresses the trailing tail.
 1            integer
 1.5          float
 "hello"      string (escapes inside ": \" \\)
+null         SQL NULL
+true / false boolean
 ```
+
+`null`, `true`, `false` are recognized as literals by word boundary, so
+identifiers like `nullable` / `true_color` / `falsey` continue to parse as
+ordinary identifiers.
+
+#### `null` and the `IS NULL` rewrite
+
+SQL treats `col = NULL` as always UNKNOWN — never TRUE — so it has to be
+written as `col IS NULL` to actually filter rows. sql-jot rewrites
+comparisons against `null` automatically:
+
+| Source | Output |
+|---|---|
+| `?col=null` | `WHERE col IS NULL` |
+| `?col<>null` | `WHERE col IS NOT NULL` |
+| `?col!=null` | `WHERE col IS NOT NULL` |
+| `?col<null` (and other ops) | passes through verbatim — UNKNOWN in SQL |
+
+In **non-comparison** positions, `null` passes through as the SQL `NULL`
+literal:
+
+| Source | Output |
+|---|---|
+| `+t<x=null` (INSERT value) | `... VALUES (NULL)` |
+| `=t<x=null?id=1` (SET RHS) | `... SET x = NULL ...` |
+| `coalesce(a,null)` (function arg) | `coalesce(a, NULL)` |
+| `?{x>0?"y":null}` (CASE branch) | `... ELSE NULL END` — the workaround for ELSE-less CASE |
+
+#### `true` / `false` and the dialect hook
+
+`true` / `false` emit as `TRUE` / `FALSE` by default — works in PostgreSQL,
+MySQL, MariaDB, SQLite. SQL Server doesn't have boolean literals (uses
+`BIT` columns with `1` / `0`); pass a hook for that case:
+
+```ts
+expand("users?active=true", {
+  bool: (v) => (v ? "1" : "0"),
+});
+// → "SELECT * FROM users WHERE active = 1"
+```
+
+The hook is consulted only for emitting the literal itself; the
+`IS NULL` rewrite is independent and unaffected.
 
 ### 7.2 Identifiers
 
@@ -630,7 +675,7 @@ expand("users~20p3", {
 
 ### 9.4 Other potential differences (not currently handled)
 
-- Boolean literals (`TRUE` / `FALSE` in PG / MySQL, `1` / `0` in SQL Server) — sql-jot doesn't currently emit a dedicated boolean literal; treat them as bare identifiers and let the runtime resolve them
+- Boolean literals — `TRUE` / `FALSE` in PG / MySQL / MariaDB / SQLite is the default. SQL Server has no boolean literal (uses `BIT` columns with `1` / `0`); use the `CompileOptions.bool` hook (see §7.1) to swap the rendering
 - String concatenation (`||` standard, `+` in SQL Server, `CONCAT()` in MySQL legacy) — not yet supported
 - Identifier quoting (`"x"` PG, `` `x` `` MySQL, `[x]` SQL Server) — sql-jot emits identifiers bare, so reserved-word column names won't survive cross-dialect porting unmodified
 
@@ -691,7 +736,8 @@ the current scope.
 - Strings: `"..."` (mandatory)
 - Numbers: integer or float
 
-Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
+Boolean and null literals: `true` / `false` / `null` are recognized by
+word boundary. See §7.1 for the comparison-rewrite rules.
 
 ---
 
@@ -701,14 +747,12 @@ Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
 |---|---|---|
 | Arithmetic in expressions (`a+b`, `a*2`) | Not supported | Only `+= -= *= /=` on the SET right-hand side |
 | `count(*)` `*` argument | Not supported | Use `count(id)` |
-| `IS NULL` / `IS NOT NULL` | Not supported | |
 | `BETWEEN` | Not supported | Use `?x>=a,x<=b` |
-| `true` / `false` / `null` literals | Not supported | |
 | JOINs in UPDATE / DELETE | Not supported | |
 | Correlated subqueries outside IN / EXISTS | Not supported | IN: `[(subq)]`, EXISTS: `^(subq)` |
 | `!` before non-IN/LIKE/EXISTS predicates | Not supported | e.g. `?!a=1` — parse error |
 | CASE / function-call expressions in ORDER BY / GROUP BY | Not supported | Both clauses only accept `QualifiedId` |
-| ELSE-less CASE | Not supported | Ternary always has both branches; needs `null` literal first |
+| ELSE-less CASE | Workaround | `?{cond?value:null}` — the `null` literal serves as the explicit "no else" value |
 | Multi-CTE test coverage | Thin | Grammar supports it |
 | Source positions in `validate` | Not supported | Names only |
 | Shorthand for `BETWEEN` / `IS NULL` | Not designed | |
@@ -761,8 +805,18 @@ to prevent re-litigation later.
   "nesting" doesn't survive into SQL. Alternative arm-list designs
   (`?{a:b,c:d,default}`) were rejected as more novel and offering no
   readability win at the same character count
-- **ELSE is mandatory in `?{...}`**: dropping it would require either a
-  `null` literal (not yet in v0) or a separate "ELSE-less" syntax. Deferred
+- **ELSE is mandatory in `?{...}`**: with the `null` literal now in,
+  `?{cond?value:null}` is the explicit "no else" form. A separate
+  ELSE-less syntax would only save 4 chars and add another rule
+- **`null` rewrites to `IS NULL`**: SQL semantically rejects `col = NULL`
+  (always UNKNOWN), so passing it through verbatim would silently produce
+  zero-row results. The compile-time rewrite makes the natural-looking
+  `?col=null` actually work. Other comparison operators (`<` / `>` etc.)
+  with `null` are left verbatim — those are user errors, not idioms
+- **`,` inside function args is strictly an arg separator**: matches SQL
+  convention. AND inside an arg requires explicit parens
+  (`func((a,b),c)`). Earlier the grammar greedily consumed `,` as AND
+  even inside `()`, which made multi-arg `coalesce(a,b)` impossible
 
 ### 12.1 Operator mnemonics
 

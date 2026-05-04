@@ -2,7 +2,7 @@
 
 > [English](SYNTAX.md) | 日本語
 
-最後にまとめた日: 2026-05-04（RETURNING / CASE 追加）
+最後にまとめた日: 2026-05-04（RETURNING / CASE / null+真偽値リテラル追加）
 
 このドキュメントは、現状実装されている sql-jot の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
 
@@ -326,10 +326,53 @@ hookが空文字を返すと末尾は出力されない。
 ### 7.1 リテラル
 
 ```
-1            数値
+1            整数
 1.5          浮動小数
 "hello"      文字列（"内のエスケープは \" \\ ）
+null         SQL の NULL
+true / false 真偽値
 ```
+
+`null` / `true` / `false` は単語境界で識別される。`nullable` / `true_color` /
+`falsey` 等の識別子は通常通りパースされる。
+
+#### `null` と `IS NULL` 自動書き換え
+
+SQL では `col = NULL` は常に UNKNOWN（TRUE にならない）ので、フィルタ
+として機能させるには `col IS NULL` で書く必要がある。sql-jot は
+`null` リテラルとの比較を自動で書き換える:
+
+| 入力 | 出力 |
+|---|---|
+| `?col=null` | `WHERE col IS NULL` |
+| `?col<>null` | `WHERE col IS NOT NULL` |
+| `?col!=null` | `WHERE col IS NOT NULL` |
+| `?col<null`（その他の比較演算子） | そのまま素通し — SQL では UNKNOWN |
+
+**比較以外の文脈**では `null` は普通の `NULL` リテラルとして出力:
+
+| 入力 | 出力 |
+|---|---|
+| `+t<x=null` (INSERT値) | `... VALUES (NULL)` |
+| `=t<x=null?id=1` (SET RHS) | `... SET x = NULL ...` |
+| `coalesce(a,null)` (関数引数) | `coalesce(a, NULL)` |
+| `?{x>0?"y":null}` (CASE分岐) | `... ELSE NULL END` — ELSE省略CASEの代替 |
+
+#### `true` / `false` と方言フック
+
+既定では `TRUE` / `FALSE` 出力（PostgreSQL / MySQL / MariaDB / SQLite で動く）。
+SQL Server は真偽値リテラルを持たない（`BIT` 列に `1` / `0`）ので、その
+場合はフックを渡す:
+
+```ts
+expand("users?active=true", {
+  bool: (v) => (v ? "1" : "0"),
+});
+// → "SELECT * FROM users WHERE active = 1"
+```
+
+フックは真偽値リテラルの出力にだけ作用する。`IS NULL` 書き換えは別系統
+なので影響を受けない。
 
 ### 7.2 識別子
 
@@ -607,7 +650,7 @@ expand("users~20p3", {
 
 ### 9.4 現状未対応の方言差
 
-- **真偽値リテラル**（`TRUE` / `FALSE` PG / MySQL、`1` / `0` SQL Server）：sql-jotは真偽値専用リテラルを持たない。bare identifier扱いなので実行時にDB側が解決
+- **真偽値リテラル**：既定で `TRUE` / `FALSE` を出力（PG / MySQL / MariaDB / SQLite で動作）。SQL Server は真偽値リテラルを持たない（`BIT` 列に `1` / `0`）ので `CompileOptions.bool` フックで差し替え（§7.1 参照）
 - **文字列連結**（`||` 標準、`+` SQL Server、`CONCAT()` MySQLレガシー）：未対応
 - **識別子クォート**（`"x"` PG、`` `x` `` MySQL、`[x]` SQL Server）：sql-jotは識別子を裸で出力。予約語衝突時は方言間移植で問題になる可能性
 
@@ -665,7 +708,8 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 - 文字列: `"..."`（必須）
 - 数値: 整数 or 小数
 
-数値以外のリテラル（`true` `false` `null`）は v0 未対応。
+真偽値・nullリテラル: `true` / `false` / `null` を単語境界で識別。
+比較時の自動書き換えルールは §7.1 を参照。
 
 ---
 
@@ -675,14 +719,12 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 |---|---|---|
 | 式中の算術（`a+b`, `a*2`） | 未対応 | SET 右辺の `+= -= *= /=` のみ可 |
 | `count(*)` の `*` 引数 | 未対応 | `count(id)` で代用 |
-| `IS NULL` / `IS NOT NULL` | 未対応 | |
 | `BETWEEN` | 未対応 | `?x>=a,x<=b` で代用 |
-| `true`/`false`/`null` リテラル | 未対応 | |
 | UPDATE/DELETE の JOIN | 未対応 | |
 | IN/EXISTS以外での相関サブクエリ | 未対応 | IN: `[(subq)]`, EXISTS: `^(subq)` |
 | `!` を IN/LIKE/EXISTS 以外の述語に付ける | 未対応 | 例: `?!a=1` はパースエラー |
 | ORDER BY / GROUP BY 内の CASE / 関数呼び出し | 未対応 | 両句とも `QualifiedId` のみ受ける |
-| ELSE省略の CASE | 未対応 | ternaryは常に両分岐必須。`null` リテラル対応待ち |
+| ELSE省略の CASE | 回避策あり | `?{cond?value:null}` で明示的に「else無し」を表現 |
 | 複数CTE のテストカバレッジ | 薄い | 文法は対応 |
 | validate の位置情報 | 未対応 | 名前のみ返す |
 | `BETWEEN`/`IS NULL` 等の独自短縮 | 未設計 | |
@@ -718,8 +760,18 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
   `?:` `??` ともゼロ学習。右再帰チェーンはコンパイル時にフラットな
   多段 `CASE WHEN` に潰すので、ソースの「ネスト」はSQL側に残らない。
   arm列挙案（`?{a:b,c:d,default}`）は同じ文字数で目新しさ過剰、却下
-- **`?{...}` のELSE必須**: 省略を許すには `null` リテラル（v0未対応）か
-  別構文が要るので保留
+- **`?{...}` のELSE必須**: `null` リテラル対応により
+  `?{cond?value:null}` で「else無し」を明示できるようになった。専用構文を
+  追加しても4文字節約程度なので不要
+- **`null` を `IS NULL` に書き換え**: SQL は `col = NULL` を常に
+  UNKNOWN として扱うため、素通しでは黙ってゼロ件結果になる。コンパイル
+  時書き換えで「直感的に書いた `?col=null`」が実際に動くようにした。
+  `<` `>` 等を `null` と組むケースは素通し（ユーザのバグなので警告に
+  留め、勝手な解釈はしない）
+- **関数引数の `,` は厳密に区切り**: SQLの慣習に合わせる。引数内で AND を
+  使いたい場合は明示的な括弧 `func((a,b),c)` を要求。以前は `()` 内でも
+  `,` を AND として貪欲に消費していたため、`coalesce(a,b)` のような
+  複数引数関数が書けなかった
 
 ### 12.1 演算子の語呂シート
 

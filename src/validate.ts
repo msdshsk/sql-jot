@@ -217,6 +217,8 @@ function walkExpr(
       break;
     case "num":
     case "str":
+    case "null":
+    case "bool":
       break;
   }
 }

@@ -241,6 +241,8 @@ CompareOp
 Atom
   = NumberLiteral
   / StringLiteral
+  / NullLiteral
+  / BoolLiteral
   / CaseExpr
   / FunctionCall
   / QualifiedId
@@ -281,7 +283,14 @@ FunctionCall
     }
 
 FuncArgList
-  = first:OrExpr rest:(_ "," _ @OrExpr)* { return [first, ...rest]; }
+  = first:FuncArg rest:(_ "," _ @FuncArg)* { return [first, ...rest]; }
+
+// Function args use `,` strictly as the arg separator (matching SQL).
+// AND inside an arg must be written with explicit parens: func((a,b),c).
+FuncArg
+  = first:Predicate rest:(_ "|" _ @Predicate)* {
+      return rest.length === 0 ? first : flatOr([first, ...rest]);
+    }
 
 QualifiedId
   = first:Identifier rest:("." @Identifier)* {
@@ -306,6 +315,16 @@ StringLiteral
 
 NumberLiteral
   = n:$("-"? [0-9]+ ("." [0-9]+)?) { return { type: "num", value: Number(n) }; }
+
+NullLiteral
+  = "null" !IdentChar { return { type: "null" }; }
+
+BoolLiteral
+  = "true" !IdentChar { return { type: "bool", value: true }; }
+  / "false" !IdentChar { return { type: "bool", value: false }; }
+
+IdentChar
+  = [a-zA-Z0-9_]
 
 Integer
   = n:$([0-9]+) { return parseInt(n, 10); }

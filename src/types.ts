@@ -12,6 +12,8 @@ export type Expr =
   | { type: "qid"; parts: string[] }
   | { type: "num"; value: number }
   | { type: "str"; value: string }
+  | { type: "null" }
+  | { type: "bool"; value: boolean }
   | { type: "func"; name: string; args: Expr[] }
   | { type: "group"; expr: Expr }
   | { type: "compare"; left: Expr; op: string; right: Expr }
@@ -170,6 +172,8 @@ export interface CompileOptions {
   paginate?: (info: LimitInfo) => string;
   /** how to render RETURNING — default emits "RETURNING ${cols.join(", ")}" */
   returning?: (info: ReturningInfo) => string;
+  /** how to render boolean literals — default emits "TRUE" / "FALSE" */
+  bool?: (value: boolean) => string;
 }
 
 /* ---------- Completion / validation ---------- */
