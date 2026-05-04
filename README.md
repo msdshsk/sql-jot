@@ -69,6 +69,14 @@ expand("orders>count(|>user_id)@uniq");
 
 expand("users?age~[18,65]");
 // → "SELECT * FROM users WHERE age BETWEEN 18 AND 65"
+
+expand('orders>user_id?status="paid" && reviews>user_id?published=true');
+// → "SELECT user_id FROM orders WHERE status = 'paid'
+//    INTERSECT
+//    SELECT user_id FROM reviews WHERE published = TRUE"
+
+expand("products>id \\\\ order_items>product_id");
+// → "SELECT id FROM products EXCEPT SELECT product_id FROM order_items"
 ```
 
 ## Syntax at a glance
@@ -87,6 +95,9 @@ expand("users?age~[18,65]");
 | `??` | null-coalesce (chains into COALESCE) | `?{a??b??"x"}` |
 | `\|>` | SELECT DISTINCT / DISTINCT inside aggregate | `users\|>dept`, `count(\|>uid)` |
 | `~[ , ]` | BETWEEN (with `!` prefix → NOT BETWEEN) | `?age~[18,65]` |
+| `\|\|` `\|\|*` | UNION / UNION ALL between two SELECTs | `a>id \|\| b>id` |
+| `&&` `&&*` | INTERSECT / INTERSECT ALL | `a>id && b>id` |
+| `\\` `\\*` | EXCEPT / EXCEPT ALL | `a>id \\ b>id` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -182,12 +193,14 @@ The core covers:
 - **`count(*)` and other `*`-arg function calls**
 - **DISTINCT** at SELECT level (`|>cols`) and inside aggregates (`count(|>col)`)
 - **BETWEEN** / **NOT BETWEEN** — `?col~[low,high]` / `?!col~[low,high]`
+- **Set operations** — `||` UNION, `&&` INTERSECT, `\\` EXCEPT (with `*`-suffix
+  for `ALL` variants); composable in CTE bodies and subqueries
 - Implicit column qualification, schema-aware validation, completion
   candidates, qualified-star (`t.*`)
 
 See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for the current limitation
-list. Notably absent: set operations (`UNION`/`INTERSECT`/`EXCEPT`),
-arithmetic in expressions, window functions, recursive CTE.
+list. Notably absent: arithmetic in expressions, window functions,
+recursive CTE.
 
 ## Development
 

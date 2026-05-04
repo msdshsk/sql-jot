@@ -68,6 +68,14 @@ expand("orders>count(|>user_id)@uniq");
 
 expand("users?age~[18,65]");
 // → "SELECT * FROM users WHERE age BETWEEN 18 AND 65"
+
+expand('orders>user_id?status="paid" && reviews>user_id?published=true');
+// → "SELECT user_id FROM orders WHERE status = 'paid'
+//    INTERSECT
+//    SELECT user_id FROM reviews WHERE published = TRUE"
+
+expand("products>id \\\\ order_items>product_id");
+// → "SELECT id FROM products EXCEPT SELECT product_id FROM order_items"
 ```
 
 ## 演算子早見表
@@ -86,6 +94,9 @@ expand("users?age~[18,65]");
 | `??` | null合体（チェーンで COALESCE 化） | `?{a??b??"x"}` |
 | `\|>` | SELECT DISTINCT ／ 集約内 DISTINCT | `users\|>dept`, `count(\|>uid)` |
 | `~[ , ]` | BETWEEN（`!` 前置で NOT BETWEEN） | `?age~[18,65]` |
+| `\|\|` `\|\|*` | UNION ／ UNION ALL（2つのSELECT間） | `a>id \|\| b>id` |
+| `&&` `&&*` | INTERSECT ／ INTERSECT ALL | `a>id && b>id` |
+| `\\` `\\*` | EXCEPT ／ EXCEPT ALL | `a>id \\ b>id` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -179,11 +190,12 @@ npm run dev
 - **`count(*)` 等、`*` を引数に取る関数呼び出し**
 - **DISTINCT** — SELECT-level (`|>cols`) / 集約内 (`count(|>col)`)
 - **BETWEEN** / **NOT BETWEEN** — `?col~[low,high]` / `?!col~[low,high]`
+- **集合演算** — `||` UNION、`&&` INTERSECT、`\\` EXCEPT（`*` 接尾辞で
+  `ALL` 版）。CTE 本体やサブクエリ内でも合成可能
 - 暗黙の列修飾、スキーマベース検証、補完候補列挙、qualified-star（`t.*`）
 
 未対応項目は [SYNTAX.ja.md §11](SYNTAX.ja.md#11-v0-の未対応既知の制約) を参照。
-特に未対応な主要機能: 集合演算（`UNION`/`INTERSECT`/`EXCEPT`）、
-式中の算術、ウィンドウ関数、再帰CTE。
+特に未対応な主要機能: 式中の算術、ウィンドウ関数、再帰CTE。
 
 ## 開発
 
