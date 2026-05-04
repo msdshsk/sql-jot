@@ -60,6 +60,15 @@ expand('users>?{nickname??"anon"}@display');
 expand("users?deleted_at=null,active=true");
 // → "SELECT * FROM users WHERE deleted_at IS NULL AND active = TRUE"
 //   ( =null is auto-rewritten to IS NULL; !=null / <>null give IS NOT NULL )
+
+expand("users|>dept");
+// → "SELECT DISTINCT dept FROM users"
+
+expand("orders>count(|>user_id)@uniq");
+// → "SELECT count(DISTINCT user_id) AS uniq FROM orders"
+
+expand("users?age~[18,65]");
+// → "SELECT * FROM users WHERE age BETWEEN 18 AND 65"
 ```
 
 ## Syntax at a glance
@@ -76,6 +85,8 @@ expand("users?deleted_at=null,active=true");
 | `!` | NOT marker (IN / LIKE / EXISTS) | `?!id[1,2,3]`, `?!^(...)` |
 | `?{ }` | CASE block (PHP-style ternary inside) | `?{x>0?"pos":"neg"}` |
 | `??` | null-coalesce (chains into COALESCE) | `?{a??b??"x"}` |
+| `\|>` | SELECT DISTINCT / DISTINCT inside aggregate | `users\|>dept`, `count(\|>uid)` |
+| `~[ , ]` | BETWEEN (with `!` prefix → NOT BETWEEN) | `?age~[18,65]` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -168,13 +179,15 @@ The core covers:
 - **`null` / `true` / `false` literals**, with auto `IS NULL` / `IS NOT NULL`
   rewrite for `=null` / `!=null` / `<>null`. `CompileOptions.bool` hook for
   SQL Server's `1` / `0` boolean rendering
+- **`count(*)` and other `*`-arg function calls**
+- **DISTINCT** at SELECT level (`|>cols`) and inside aggregates (`count(|>col)`)
+- **BETWEEN** / **NOT BETWEEN** — `?col~[low,high]` / `?!col~[low,high]`
 - Implicit column qualification, schema-aware validation, completion
   candidates, qualified-star (`t.*`)
 
 See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for the current limitation
-list. Notably absent: `BETWEEN`, `DISTINCT`, set operations
-(`UNION`/`INTERSECT`/`EXCEPT`), arithmetic in expressions, window
-functions, recursive CTE.
+list. Notably absent: set operations (`UNION`/`INTERSECT`/`EXCEPT`),
+arithmetic in expressions, window functions, recursive CTE.
 
 ## Development
 

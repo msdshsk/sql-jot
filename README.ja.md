@@ -59,6 +59,15 @@ expand('users>?{nickname??"anon"}@display');
 expand("users?deleted_at=null,active=true");
 // → "SELECT * FROM users WHERE deleted_at IS NULL AND active = TRUE"
 //   ( =null は IS NULL に自動書き換え。!=null / <>null は IS NOT NULL )
+
+expand("users|>dept");
+// → "SELECT DISTINCT dept FROM users"
+
+expand("orders>count(|>user_id)@uniq");
+// → "SELECT count(DISTINCT user_id) AS uniq FROM orders"
+
+expand("users?age~[18,65]");
+// → "SELECT * FROM users WHERE age BETWEEN 18 AND 65"
 ```
 
 ## 演算子早見表
@@ -75,6 +84,8 @@ expand("users?deleted_at=null,active=true");
 | `!` | NOT マーカー（IN / LIKE / EXISTS） | `?!id[1,2,3]`, `?!^(...)` |
 | `?{ }` | CASE ブロック（中身は PHP 風 ternary） | `?{x>0?"pos":"neg"}` |
 | `??` | null合体（チェーンで COALESCE 化） | `?{a??b??"x"}` |
+| `\|>` | SELECT DISTINCT ／ 集約内 DISTINCT | `users\|>dept`, `count(\|>uid)` |
+| `~[ , ]` | BETWEEN（`!` 前置で NOT BETWEEN） | `?age~[18,65]` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -165,11 +176,14 @@ npm run dev
 - **`null` / `true` / `false` リテラル** — `=null` / `!=null` / `<>null` は
   `IS NULL` / `IS NOT NULL` に自動書き換え。SQL Server向けの真偽値
   `1` / `0` 出力用に `CompileOptions.bool` フック
+- **`count(*)` 等、`*` を引数に取る関数呼び出し**
+- **DISTINCT** — SELECT-level (`|>cols`) / 集約内 (`count(|>col)`)
+- **BETWEEN** / **NOT BETWEEN** — `?col~[low,high]` / `?!col~[low,high]`
 - 暗黙の列修飾、スキーマベース検証、補完候補列挙、qualified-star（`t.*`）
 
 未対応項目は [SYNTAX.ja.md §11](SYNTAX.ja.md#11-v0-の未対応既知の制約) を参照。
-特に未対応な主要機能: `BETWEEN`、`DISTINCT`、集合演算
-（`UNION`/`INTERSECT`/`EXCEPT`）、式中の算術、ウィンドウ関数、再帰CTE。
+特に未対応な主要機能: 集合演算（`UNION`/`INTERSECT`/`EXCEPT`）、
+式中の算術、ウィンドウ関数、再帰CTE。
 
 ## 開発
 
