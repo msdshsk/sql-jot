@@ -1,12 +1,20 @@
 {
   "name": "sql-jot",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Emmet-like shorthand syntax that expands into SQL",
   "author": "msd.shsk <msd.shsk@gmail.com>",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/msdshsk/sql-jot.git"
+  },
+  "homepage": "https://github.com/msdshsk/sql-jot#readme",
+  "bugs": {
+    "url": "https://github.com/msdshsk/sql-jot/issues"
+  },
   "files": [
     "dist",
     "src",
@@ -14,6 +22,7 @@
     "README.ja.md",
     "SYNTAX.md",
     "SYNTAX.ja.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
