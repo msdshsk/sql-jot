@@ -2,7 +2,7 @@
 
 > [English](SYNTAX.md) | 日本語
 
-最後にまとめた日: 2026-05-01
+最後にまとめた日: 2026-05-04（RETURNING / CASE 追加）
 
 このドキュメントは、現状実装されている sql-jot の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
 
@@ -47,6 +47,10 @@
 | `[ ]` | ON条件 ／ IN（リスト/参照/サブクエリ） | `+t[a.id=b.id]`, `?id[1,2,3]`, `?id[cte]`, `?id[(subq)]` |
 | `( )` | インラインサブクエリ ／ INSERT列リスト ／ 式グルーピング | `+t<(s>x)`, `+t(c1,c2)<(...)` |
 | `{ }` | CTE（文頭）／ INSERT行ブロック（`<`の後） | `{src>x}@s`, `+t<{a=1},{a=2}` |
+| `^( )` | EXISTSサブクエリ（WHERE / HAVING内） | `?^(t?x=1)` |
+| `!` | NOTマーカー — IN / LIKE / EXISTSの前置 | `?!id[1,2,3]`, `?!^(...)` |
+| `?{ }` | CASE式（中身はPHP風ternary） | `?{x>0?"pos":"neg"}` |
+| `??` | NULL合体（チェーンで `COALESCE(...)` に展開） | `?{a??b??"x"}` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -114,6 +118,10 @@ users?age>=18                   # 比較
 users?id<>0                     # 不等
 users?name%"john"               # LIKE
 users?id[1,2,3]                 # IN
+users?^(orders?user_id=1)       # EXISTS
+users?!id[1,2,3]                # NOT IN
+users?!name%"john"              # NOT LIKE
+users?!^(orders?user_id=1)      # NOT EXISTS
 users?a=1,b=2                   # AND（カンマ）
 users?a=1|b=2                   # OR（パイプ）
 users?a=1,b=2|c=3               # AND/OR混在 → (a=1 AND b=2) OR c=3
@@ -248,6 +256,44 @@ DB方言別変換は `CompileOptions.paginate` フックで差し替え可能。
 
 > 全行削除を文法レベルでブロックしない設計判断。安全装置はホスト側で。
 
+### 5.4 RETURNING — 末尾 `>cols`
+
+CUDの末尾に `>cols` を付けると `RETURNING` 句を出力する。列リストの文法は
+SELECTと共通（エイリアス、`*`、`t.*` 全て使える）:
+
+```
++users<name="alice">id,created_at
+→ INSERT INTO users (name) VALUES ('alice') RETURNING id, created_at
+
+=products<price*=1.1?category="food">id,price
+→ UPDATE products SET price = price * 1.1 WHERE category = 'food'
+   RETURNING id, price
+
+-sessions?expires_at<now()>user_id,token
+→ DELETE FROM sessions WHERE expires_at < now()
+   RETURNING user_id, token
+
++users<name="alice">*
+→ INSERT INTO users (name) VALUES ('alice') RETURNING *
+```
+
+#### 方言切替 — `CompileOptions.returning`
+
+`RETURNING` は PostgreSQL / SQLite 3.35+ / MariaDB がネイティブ対応。
+MySQL（`LAST_INSERT_ID()`）や SQL Server（`OUTPUT`）向けには hook で
+末尾の出力を差し替える:
+
+```ts
+expand('+users<name="alice">id', {
+  returning: ({ verb, table, cols }) => {
+    if (verb === "insert") return "; SELECT LAST_INSERT_ID()";
+    return "";  // 他の動詞では抑制
+  },
+});
+```
+
+hookが空文字を返すと末尾は出力されない。
+
 ---
 
 ## 6. CTE — `{ }` プレフィックス
@@ -343,6 +389,92 @@ lower(name)
 - テーブル/CTE参照は単一の裸識別子のみ。`[t.col]` は不可（`[(t>col)]` を使う）
 - サブクエリは `( ... )` で範囲明示。中に CTE もネスト可能
 
+### 7.7 EXISTS — `^( ... )`
+
+列に紐づかない述語。内側のクエリが**1行でも返せば真**。`^( ... )` の中身は
+sql-jot のクエリ全体で、トップレベルで書けるものは何でも書ける。
+
+```
+?^(orders?user_id=1)
+                                → EXISTS (SELECT * FROM orders WHERE user_id = 1)
+
+?^(orders>id?status="open")
+                                → EXISTS (SELECT id FROM orders WHERE status = 'open')
+```
+
+EXISTSは述語なので `,`（AND）`|`（OR）と自由に合成可能。HAVING内でも使える。
+
+### 7.8 NOT — `!` 前置
+
+`!` を IN / LIKE / EXISTS の述語の直前に置くと否定形になる。
+**直後の述語1つだけ**に適用される（`,` `|` を越えて伝播しない）。
+
+```
+?!id[1,2,3]                     → id NOT IN (1, 2, 3)
+?!name%"john"                   → name NOT LIKE '%john%'
+?!^(orders?user_id=1)           → NOT EXISTS (SELECT * FROM orders WHERE user_id = 1)
+```
+
+`!` は v0 では**汎用の論理否定ではない** — IN / LIKE / EXISTS の前にだけ書ける。
+`?!a=1` はパースエラー。
+
+### 7.9 CASE — `?{ ... }`（中身はPHP風ternary）
+
+`?{ ... }` の中身はパーサが PHP/C/JS 風の三項演算子として解釈する。
+右再帰の `?:` チェーンは**フラットな多段 `CASE WHEN`** に潰してコンパイルする。
+
+```
+?{x>0?"pos":"neg"}
+                                → CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END
+
+?{score>=90?"A":score>=80?"B":score>=70?"C":"F"}
+                                → CASE WHEN score >= 90 THEN 'A'
+                                       WHEN score >= 80 THEN 'B'
+                                       WHEN score >= 70 THEN 'C'
+                                       ELSE 'F' END
+```
+
+cond部分はWHEREと同じ式が書ける（`,` AND, `|` OR, 比較, IN, LIKE, EXISTS等）:
+
+```
+?{a=1,b=2?"both":"none"}        → CASE WHEN a = 1 AND b = 2 THEN 'both' ELSE 'none' END
+```
+
+`?{ ... }` は Atom なので**式が書ける場所ならどこでも使える**
+（SELECT列、WHERE、HAVING、関数引数、INSERT行値、UPDATE SET RHS）。
+
+ブロック内のwhitespaceは自由なので、縦書きでアームリストっぽく書ける:
+
+```
+?{
+  score>=90?"A":
+  score>=80?"B":
+  score>=70?"C":
+  "F"
+}
+```
+
+ELSE は省略不可（ternaryは常に両分岐必須）。NULLフォールバックが要るなら、
+将来 `null` リテラル対応待ちか、センチネル値を使うこと。
+
+### 7.10 COALESCE — `??` チェーン
+
+`?{ ... }` の中の `??` はnull合体演算子。チェーンは平坦化されて単一の
+`COALESCE(...)` 呼び出しになる:
+
+```
+?{nickname??"anon"}             → COALESCE(nickname, 'anon')
+?{a??b??c??"d"}                 → COALESCE(a, b, c, 'd')
+```
+
+`??` は `?:` より結合度が強いので、ternaryの cond/then/else どこでも使える:
+
+```
+?{score>=80?"pass":fallback??"unknown"}
+→ CASE WHEN score >= 80 THEN 'pass'
+       ELSE COALESCE(fallback, 'unknown') END
+```
+
 ---
 
 ## 8. スキーマ連携
@@ -426,6 +558,7 @@ users+orders?total>1000
 | `>` `?` `:` `#` `$` `,` `<` `\|` `=` `[` 直後 | 列（scope内テーブル） |
 | `識別子.` 直後 | その識別子のテーブル/エイリアスの列 |
 | `@` 直後 | （候補なし — エイリアス命名中） |
+| `!` 直後 | 透過 — `!` の前の文字で文脈を判定 |
 
 `longestCommonPrefix(candidates)` ヘルパで Tab 前置一致展開を実装可能。
 
@@ -518,6 +651,14 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `*` | SELECT列の単独 | 全列 |
 | `*` | `<ident>.<*>` | qualified star（そのテーブル全列） |
 | `*` | JoinType | FULL JOIN |
+| `^(` | WHERE/HAVING内 | EXISTS サブクエリ |
+| `!` | 述語（IN / LIKE / EXISTS）の直前 | NOTマーカー |
+| `!=` | 2つのAtomの間 | 不等比較 |
+| `>` | CUDボディの末尾 | RETURNING 列リスト |
+| `?{` | 式位置 | CASEブロック開始 |
+| `?` | `?{...}` 内、condとthenの間 | ternaryマーカー |
+| `:` | `?{...}` 内、thenとelseの間 | ternary区切り |
+| `??` | `?{...}` 内、オペランド間 | null合体 |
 
 ### 10.2 リテラル
 
@@ -538,7 +679,10 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `BETWEEN` | 未対応 | `?x>=a,x<=b` で代用 |
 | `true`/`false`/`null` リテラル | 未対応 | |
 | UPDATE/DELETE の JOIN | 未対応 | |
-| IN以外の場所での相関サブクエリ | 未対応 | IN内は `[(subq)]` で対応済 |
+| IN/EXISTS以外での相関サブクエリ | 未対応 | IN: `[(subq)]`, EXISTS: `^(subq)` |
+| `!` を IN/LIKE/EXISTS 以外の述語に付ける | 未対応 | 例: `?!a=1` はパースエラー |
+| ORDER BY / GROUP BY 内の CASE / 関数呼び出し | 未対応 | 両句とも `QualifiedId` のみ受ける |
+| ELSE省略の CASE | 未対応 | ternaryは常に両分岐必須。`null` リテラル対応待ち |
 | 複数CTE のテストカバレッジ | 薄い | 文法は対応 |
 | validate の位置情報 | 未対応 | 名前のみ返す |
 | `BETWEEN`/`IS NULL` 等の独自短縮 | 未設計 | |
@@ -561,6 +705,21 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 - **AND は `,`、OR は `\|`**: AND が圧倒的多数なので短い記号を割り当て
 - **スキーマ非所有**: sql-jot は問い合わせ口だけ。データ取得・キャッシュ・型管理はホスト責務
 - **補完ポップアップ非実装**: Emmet ユーザにはポップアップが邪魔。Tab前置一致と Ctrl+Space を経路として用意し、UI 判断はホスト
+- **EXISTS は `^( ... )`**: 未使用記号で「対象行の上に立つ」イメージ。
+  代替案: bare な `?(subq)` は式グルーピングと衝突、`?ex(...)` のような
+  キーワード方式は記号至上の方針から外れる、で却下
+- **`!` は IN / LIKE / EXISTS のみ否定**: SQLが `NOT IN` `NOT LIKE`
+  `NOT EXISTS` の専用形を持つ3つに限定。汎用否定（`?!a=1`）は `!=` との
+  混同回避と、述語文法を狭く保つために保留
+- **RETURNING は `>` を再利用**: `>` は既に「データの射出方向」（SELECT列）
+  の意味を持つ。CUD後の「変更行の射出」も同じ概念なので意味的に整合。
+  CUDボディが現状 `>` を別意味で使っていないので衝突無し
+- **CASE は `?{ ... }` 内 PHP-style ternary**: PHP/JS/C/TS 経験者なら
+  `?:` `??` ともゼロ学習。右再帰チェーンはコンパイル時にフラットな
+  多段 `CASE WHEN` に潰すので、ソースの「ネスト」はSQL側に残らない。
+  arm列挙案（`?{a:b,c:d,default}`）は同じ文字数で目新しさ過剰、却下
+- **`?{...}` のELSE必須**: 省略を許すには `null` リテラル（v0未対応）か
+  別構文が要るので保留
 
 ### 12.1 演算子の語呂シート
 
@@ -584,6 +743,10 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `{}` | グループブロック（CTE / 行ブロック） |
 | `[]` | 添え字感 → IN リスト ／ ON マッピング |
 | `()` | 通常の式グルーピング ／ サブクエリ ／ INSERT列リスト |
+| `^( )` | 内側の行の「上に立つ」 → EXISTS |
+| `!` | C系言語の論理NOTから |
+| `?{ }` | 「どっち？」のブロック → CASEのアームを束ねる |
+| `??` | PHP/C# のNULL合体演算子をそのまま流用 |
 
 ---
 

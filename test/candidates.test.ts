@@ -65,6 +65,20 @@ describe("getCandidates: table context", () => {
     const names = namesAt("+", 1);
     expect(names).toEqual(expect.arrayContaining(["users", "orders"]));
   });
+
+  it("inside EXISTS subquery `^(` suggests tables", () => {
+    const input = "users?^(";
+    const names = namesAt(input, input.length);
+    expect(names).toEqual(expect.arrayContaining(["users", "orders"]));
+  });
+});
+
+describe("getCandidates: NOT marker is transparent", () => {
+  it("after `?!` suggests columns (like after `?`)", () => {
+    const input = "users?!cre";
+    const names = namesAt(input, input.length);
+    expect(names).toEqual(["created_at"]);
+  });
 });
 
 describe("longestCommonPrefix", () => {

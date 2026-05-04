@@ -17,6 +17,10 @@ export type Expr =
   | { type: "compare"; left: Expr; op: string; right: Expr }
   | { type: "like"; col: Expr; pattern: { type: "str"; value: string } }
   | { type: "in"; col: Expr; source: InSource }
+  | { type: "exists"; query: Query }
+  | { type: "not"; expr: Expr }
+  | { type: "case"; whens: { when: Expr; then: Expr }[]; else: Expr | null }
+  | { type: "coalesce"; items: Expr[] }
   | { type: "and"; items: Expr[] }
   | { type: "or"; items: Expr[] };
 
@@ -91,6 +95,7 @@ export interface InsertBody {
   table: TableRef;
   cols: string[] | null;
   values: InsertValues;
+  returning: SelectItem[] | null;
 }
 
 export interface UpdateBody {
@@ -98,12 +103,14 @@ export interface UpdateBody {
   table: TableRef;
   assigns: UpdateAssign[];
   where: Expr | null;
+  returning: SelectItem[] | null;
 }
 
 export interface DeleteBody {
   kind: "delete";
   table: TableRef;
   where: Expr | null;
+  returning: SelectItem[] | null;
 }
 
 export type QueryBody = SelectBody | InsertBody | UpdateBody | DeleteBody;
@@ -150,10 +157,19 @@ export interface SchemaResolver {
   listTables?(): string[] | null;
 }
 
+export interface ReturningInfo {
+  verb: "insert" | "update" | "delete";
+  table: string;
+  /** column expressions already rendered to SQL (with aliases) */
+  cols: string[];
+}
+
 export interface CompileOptions {
   schema?: SchemaResolver;
   /** how to render LIMIT/PAGE — default emits "LIMIT n OFFSET m" */
   paginate?: (info: LimitInfo) => string;
+  /** how to render RETURNING — default emits "RETURNING ${cols.join(", ")}" */
+  returning?: (info: ReturningInfo) => string;
 }
 
 /* ---------- Completion / validation ---------- */

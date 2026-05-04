@@ -2,7 +2,7 @@
 
 > English | [日本語](SYNTAX.ja.md)
 
-Last updated: 2026-05-01
+Last updated: 2026-05-04 (RETURNING / CASE)
 
 This document covers the full grammar and semantics of sql-jot as currently
 implemented. If the implementation and this doc disagree, **the implementation
@@ -50,6 +50,10 @@ unambiguously.
 | `[ ]` | ON ／ IN (list / ref / subquery) | `+t[a.id=b.id]`, `?id[1,2,3]`, `?id[cte]`, `?id[(subq)]` |
 | `( )` | inline subquery ／ INSERT column list ／ expression grouping | `+t<(s>x)`, `+t(c1,c2)<(...)` |
 | `{ }` | CTE (statement head) ／ INSERT row block (after `<`) | `{src>x}@s`, `+t<{a=1},{a=2}` |
+| `^( )` | EXISTS subquery (in WHERE / HAVING) | `?^(t?x=1)` |
+| `!` | NOT marker — prefixes IN / LIKE / EXISTS | `?!id[1,2,3]`, `?!^(...)` |
+| `?{ }` | CASE expression (PHP-style ternary inside) | `?{x>0?"pos":"neg"}` |
+| `??` | null-coalesce (chains into `COALESCE(...)`) | `?{a??b??"x"}` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -110,6 +114,10 @@ users?age>=18                   # comparison
 users?id<>0                     # inequality
 users?name%"john"               # LIKE
 users?id[1,2,3]                 # IN
+users?^(orders?user_id=1)       # EXISTS
+users?!id[1,2,3]                # NOT IN
+users?!name%"john"              # NOT LIKE
+users?!^(orders?user_id=1)      # NOT EXISTS
 users?a=1,b=2                   # AND (comma)
 users?a=1|b=2                   # OR (pipe)
 users?a=1,b=2|c=3               # mixed → (a=1 AND b=2) OR c=3
@@ -248,6 +256,44 @@ expressions don't yet support arithmetic.
 > Mass-delete is intentionally not blocked at the syntax level. Safety guards
 > belong in the host application.
 
+### 5.4 RETURNING — trailing `>cols`
+
+Append `>cols` to any CUD statement to emit a `RETURNING` clause. The column
+list shares its grammar with SELECT (aliases, `*`, qualified `t.*` all work):
+
+```
++users<name="alice">id,created_at
+→ INSERT INTO users (name) VALUES ('alice') RETURNING id, created_at
+
+=products<price*=1.1?category="food">id,price
+→ UPDATE products SET price = price * 1.1 WHERE category = 'food'
+   RETURNING id, price
+
+-sessions?expires_at<now()>user_id,token
+→ DELETE FROM sessions WHERE expires_at < now()
+   RETURNING user_id, token
+
++users<name="alice">*
+→ INSERT INTO users (name) VALUES ('alice') RETURNING *
+```
+
+#### Dialect override — `CompileOptions.returning`
+
+`RETURNING` is supported by PostgreSQL, SQLite 3.35+, and MariaDB. For
+MySQL or SQL Server (which use `OUTPUT`), pass a hook to render the tail
+yourself:
+
+```ts
+expand('+users<name="alice">id', {
+  returning: ({ verb, table, cols }) => {
+    if (verb === "insert") return "; SELECT LAST_INSERT_ID()";
+    return "";  // suppress for other verbs
+  },
+});
+```
+
+Returning an empty string from the hook suppresses the trailing tail.
+
 ---
 
 ## 6. CTE — `{ }` prefix
@@ -350,6 +396,99 @@ The contents of `[ ]` take one of three forms:
 - The subquery form uses `( ... )` to delimit the inner query. Nested CTEs
   are allowed inside
 
+### 7.7 EXISTS — `^( ... )`
+
+A bare predicate (not bound to any column) that tests whether the inner
+query produces at least one row. The contents of `^( ... )` are an entire
+sql-jot query — anything legal at top level is legal here.
+
+```
+?^(orders?user_id=1)
+                                → EXISTS (SELECT * FROM orders WHERE user_id = 1)
+
+?^(orders>id?status="open")
+                                → EXISTS (SELECT id FROM orders WHERE status = 'open')
+```
+
+EXISTS is a predicate, so it composes with `,` (AND) and `|` (OR) like any
+other predicate. It's also valid in HAVING.
+
+### 7.8 NOT — `!` prefix
+
+`!` placed before an IN / LIKE / EXISTS predicate negates it. The marker
+applies to **the immediately following predicate only** — it doesn't propagate
+through `,` or `|`.
+
+```
+?!id[1,2,3]                     → id NOT IN (1, 2, 3)
+?!name%"john"                   → name NOT LIKE '%john%'
+?!^(orders?user_id=1)           → NOT EXISTS (SELECT * FROM orders WHERE user_id = 1)
+```
+
+`!` is **not** a general boolean negation in v0 — it's only valid before
+IN / LIKE / EXISTS. `?!a=1` is a parse error.
+
+### 7.9 CASE — `?{ ... }` (PHP-style ternary inside)
+
+Inside `?{ ... }` the parser treats the body as a single PHP/C/JS-style
+ternary expression. Right-recursive `?:` chains compile to a flat
+`CASE WHEN ... THEN ... ELSE ... END`.
+
+```
+?{x>0?"pos":"neg"}
+                                → CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END
+
+?{score>=90?"A":score>=80?"B":score>=70?"C":"F"}
+                                → CASE WHEN score >= 90 THEN 'A'
+                                       WHEN score >= 80 THEN 'B'
+                                       WHEN score >= 70 THEN 'C'
+                                       ELSE 'F' END
+```
+
+The ternary cond accepts the full WHERE-style expression grammar, so `,`
+(AND), `|` (OR), comparisons, IN, LIKE, EXISTS, etc. all work:
+
+```
+?{a=1,b=2?"both":"none"}        → CASE WHEN a = 1 AND b = 2 THEN 'both' ELSE 'none' END
+```
+
+`?{ ... }` is an Atom — it's valid anywhere an expression is (SELECT cols,
+WHERE, HAVING, function args, INSERT row values, UPDATE SET RHS).
+
+Whitespace inside the block is free, so a vertical layout reads like a
+case-arm list:
+
+```
+?{
+  score>=90?"A":
+  score>=80?"B":
+  score>=70?"C":
+  "F"
+}
+```
+
+ELSE cannot be omitted (ternary always has both branches). If you want a
+NULL fallback, wait until `null` literals are added in a future round, or
+use a sentinel value.
+
+### 7.10 COALESCE — `??` chain
+
+`??` inside `?{ ... }` is the null-coalescing operator. Chains flatten into
+a single `COALESCE(...)` call:
+
+```
+?{nickname??"anon"}             → COALESCE(nickname, 'anon')
+?{a??b??c??"d"}                 → COALESCE(a, b, c, 'd')
+```
+
+`??` binds tighter than `?:`, so it can appear in ternary cond/then/else:
+
+```
+?{score>=80?"pass":fallback??"unknown"}
+→ CASE WHEN score >= 80 THEN 'pass'
+       ELSE COALESCE(fallback, 'unknown') END
+```
+
 ---
 
 ## 8. Schema integration
@@ -440,6 +579,7 @@ prescribed** — that's the host's responsibility.
 | `>` `?` `:` `#` `$` `,` `<` `\|` `=` `[` | columns (in-scope tables) |
 | `<ident>.` | columns of that table or alias |
 | `@` | (no candidates — naming an alias) |
+| `!` | transparent — context is taken from the char before `!` |
 
 `longestCommonPrefix(candidates)` is provided as a helper for
 Tab-style prefix expansion.
@@ -537,6 +677,14 @@ the current scope.
 | `*` | as a single SELECT item | all columns |
 | `*` | as `<ident>.*` | qualified star |
 | `*` | inside a JoinType | FULL JOIN |
+| `^(` | inside WHERE/HAVING | EXISTS subquery |
+| `!` | leading a predicate (IN / LIKE / EXISTS) | NOT marker |
+| `!=` | between two atoms | not-equal comparison |
+| `>` | trailing a CUD body | RETURNING column list |
+| `?{` | at expression position | CASE block |
+| `?` | inside `?{...}`, between cond and then | ternary marker |
+| `:` | inside `?{...}`, between then and else | ternary separator |
+| `??` | inside `?{...}`, between operands | null-coalesce |
 
 ### 10.2 Literals
 
@@ -557,7 +705,10 @@ Boolean / null literals (`true`, `false`, `null`) are not yet first-class.
 | `BETWEEN` | Not supported | Use `?x>=a,x<=b` |
 | `true` / `false` / `null` literals | Not supported | |
 | JOINs in UPDATE / DELETE | Not supported | |
-| Correlated subqueries outside IN | Not supported | IN supports `[(subq)]` |
+| Correlated subqueries outside IN / EXISTS | Not supported | IN: `[(subq)]`, EXISTS: `^(subq)` |
+| `!` before non-IN/LIKE/EXISTS predicates | Not supported | e.g. `?!a=1` — parse error |
+| CASE / function-call expressions in ORDER BY / GROUP BY | Not supported | Both clauses only accept `QualifiedId` |
+| ELSE-less CASE | Not supported | Ternary always has both branches; needs `null` literal first |
 | Multi-CTE test coverage | Thin | Grammar supports it |
 | Source positions in `validate` | Not supported | Names only |
 | Shorthand for `BETWEEN` / `IS NULL` | Not designed | |
@@ -592,6 +743,26 @@ to prevent re-litigation later.
 - **No autocomplete popup**: popups break the typing rhythm Emmet exists
   for. Tab prefix-expansion and Ctrl+Space are exposed as inputs to the
   host; UI choices stay with the host
+- **EXISTS via `^( ... )`**: a previously-unused symbol, picked for the
+  "stands above the row" mnemonic. Other forms considered: bare `?(subq)`
+  collided with expression grouping; text keywords (`?ex(...)`) clashed
+  with the symbol-first style
+- **`!` only negates IN / LIKE / EXISTS**: those three are where SQL has
+  a dedicated `NOT IN` / `NOT LIKE` / `NOT EXISTS` form. General boolean
+  negation (`?!a=1`) was deferred to avoid colliding with `!=` and to
+  keep the predicate grammar narrow until we have a concrete need
+- **RETURNING reuses `>`**: `>` already means "data flowing out" (SELECT
+  column list). Reusing it for "outflow of mutation" is semantically
+  consistent. Conflict-free because no CUD body currently ends with `>`
+  having any other meaning
+- **CASE uses PHP-style ternary inside `?{ ... }`**: every PHP/JS/C/TS
+  developer knows `?:` and `??`. Right-recursive ternary chains collapse
+  into a flat multi-arm `CASE WHEN` at compile time, so the source-level
+  "nesting" doesn't survive into SQL. Alternative arm-list designs
+  (`?{a:b,c:d,default}`) were rejected as more novel and offering no
+  readability win at the same character count
+- **ELSE is mandatory in `?{...}`**: dropping it would require either a
+  `null` literal (not yet in v0) or a separate "ELSE-less" syntax. Deferred
 
 ### 12.1 Operator mnemonics
 
@@ -616,6 +787,10 @@ re-derive it.
 | `{}` | block of grouped items (CTE / row block) |
 | `[]` | subscript-like → IN list / ON mapping |
 | `()` | regular grouping / subquery / INSERT column list |
+| `^( )` | "stands above" the inner row → EXISTS |
+| `!` | borrowed from C-family logical NOT |
+| `?{ }` | "which? block" — ternary case in a block |
+| `??` | PHP/C# null-coalesce, reused literally |
 
 ---
 

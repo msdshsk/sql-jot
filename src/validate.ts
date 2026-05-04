@@ -4,6 +4,7 @@ import type {
   MainQuery,
   Query,
   SchemaResolver,
+  SelectItem,
   TableRef,
   ValidationIssue,
 } from "./types.js";
@@ -61,6 +62,7 @@ export function validate(
       } else {
         validate(query.body.values.query, resolver).forEach((i) => issues.push(i));
       }
+      walkReturning(query.body.returning, query.body.table, resolver, issues);
       break;
     case "update": {
       walkTable(query.body.table, resolver, issues);
@@ -79,6 +81,7 @@ export function validate(
       if (query.body.where) {
         walkExpr(query.body.where, [query.body.table], resolver, issues);
       }
+      walkReturning(query.body.returning, query.body.table, resolver, issues);
       break;
     }
     case "delete":
@@ -86,9 +89,22 @@ export function validate(
       if (query.body.where) {
         walkExpr(query.body.where, [query.body.table], resolver, issues);
       }
+      walkReturning(query.body.returning, query.body.table, resolver, issues);
       break;
   }
   return issues;
+}
+
+function walkReturning(
+  cols: SelectItem[] | null,
+  table: TableRef,
+  resolver: SchemaResolver,
+  issues: ValidationIssue[],
+): void {
+  if (!cols) return;
+  for (const it of cols) {
+    if (it.type === "col") walkExpr(it.expr, [table], resolver, issues);
+  }
 }
 
 function walkMain(
@@ -176,6 +192,24 @@ function walkExpr(
       }
       // ref form: skip validation — the named entity could be a CTE
       // not visible to walkExpr's scope. Future: thread CTE names down.
+      break;
+    case "exists":
+      // Subquery is validated independently; correlated outer references
+      // will warn for now (same limitation as IN-with-subquery).
+      for (const i of validate(e.query, resolver)) issues.push(i);
+      break;
+    case "not":
+      walkExpr(e.expr, scope, resolver, issues);
+      break;
+    case "case":
+      for (const w of e.whens) {
+        walkExpr(w.when, scope, resolver, issues);
+        walkExpr(w.then, scope, resolver, issues);
+      }
+      if (e.else) walkExpr(e.else, scope, resolver, issues);
+      break;
+    case "coalesce":
+      for (const it of e.items) walkExpr(it, scope, resolver, issues);
       break;
     case "and":
     case "or":

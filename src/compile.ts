@@ -49,10 +49,10 @@ function compileInner(query: Query, options: CompileOptions): string {
       parts.push(emitInsert(query.body, options));
       break;
     case "update":
-      parts.push(emitUpdate(query.body));
+      parts.push(emitUpdate(query.body, options));
       break;
     case "delete":
-      parts.push(emitDelete(query.body));
+      parts.push(emitDelete(query.body, options));
       break;
   }
 
@@ -272,45 +272,48 @@ function emitJoin(j: Join, home: ColumnHome): string {
 function emitInsert(body: InsertBody, options: CompileOptions): string {
   const tableSql = emitTableRef(body.table);
 
+  let head: string;
   if (body.values.kind === "subquery") {
     const colsSql = body.cols ? ` (${body.cols.join(", ")})` : "";
     const subqSql = compileInner(body.values.query, options);
-    return `INSERT INTO ${tableSql}${colsSql} ${subqSql}`;
-  }
-
-  const rows = body.values.rows;
-  if (rows.length === 0) {
-    throw new Error("INSERT requires at least one row");
-  }
-  const cols = body.cols ?? rows[0]!.map((a) => a.col);
-
-  for (const row of rows) {
-    if (row.length !== cols.length) {
-      throw new Error(
-        `Row column count (${row.length}) does not match expected (${cols.length})`,
-      );
+    head = `INSERT INTO ${tableSql}${colsSql} ${subqSql}`;
+  } else {
+    const rows = body.values.rows;
+    if (rows.length === 0) {
+      throw new Error("INSERT requires at least one row");
     }
-    if (!body.cols) {
-      const rowCols = row.map((a) => a.col);
-      for (let i = 0; i < cols.length; i++) {
-        if (rowCols[i] !== cols[i]) {
-          throw new Error(
-            `Multi-row INSERT must declare same columns in same order: expected ${cols[i]}, got ${rowCols[i]}`,
-          );
+    const cols = body.cols ?? rows[0]!.map((a) => a.col);
+
+    for (const row of rows) {
+      if (row.length !== cols.length) {
+        throw new Error(
+          `Row column count (${row.length}) does not match expected (${cols.length})`,
+        );
+      }
+      if (!body.cols) {
+        const rowCols = row.map((a) => a.col);
+        for (let i = 0; i < cols.length; i++) {
+          if (rowCols[i] !== cols[i]) {
+            throw new Error(
+              `Multi-row INSERT must declare same columns in same order: expected ${cols[i]}, got ${rowCols[i]}`,
+            );
+          }
         }
       }
     }
+
+    const empty: ColumnHome = { unique: new Map() };
+    const valuesSql = rows
+      .map((row) => `(${row.map((a) => emitExpr(a.value, empty)).join(", ")})`)
+      .join(", ");
+
+    head = `INSERT INTO ${tableSql} (${cols.join(", ")}) VALUES ${valuesSql}`;
   }
 
-  const empty: ColumnHome = { unique: new Map() };
-  const valuesSql = rows
-    .map((row) => `(${row.map((a) => emitExpr(a.value, empty)).join(", ")})`)
-    .join(", ");
-
-  return `INSERT INTO ${tableSql} (${cols.join(", ")}) VALUES ${valuesSql}`;
+  return appendReturning(head, body.returning, "insert", body.table.name, options);
 }
 
-function emitUpdate(body: UpdateBody): string {
+function emitUpdate(body: UpdateBody, options: CompileOptions): string {
   const tableSql = emitTableRef(body.table);
   const empty: ColumnHome = { unique: new Map() };
   const setClauses = body.assigns.map((a) => {
@@ -321,15 +324,36 @@ function emitUpdate(body: UpdateBody): string {
   });
   let sql = `UPDATE ${tableSql} SET ${setClauses.join(", ")}`;
   if (body.where) sql += ` WHERE ${emitExpr(body.where, empty)}`;
-  return sql;
+  return appendReturning(sql, body.returning, "update", body.table.name, options);
 }
 
-function emitDelete(body: DeleteBody): string {
+function emitDelete(body: DeleteBody, options: CompileOptions): string {
   const tableSql = emitTableRef(body.table);
   const empty: ColumnHome = { unique: new Map() };
   let sql = `DELETE FROM ${tableSql}`;
   if (body.where) sql += ` WHERE ${emitExpr(body.where, empty)}`;
-  return sql;
+  return appendReturning(sql, body.returning, "delete", body.table.name, options);
+}
+
+function appendReturning(
+  head: string,
+  cols: SelectItem[] | null,
+  verb: "insert" | "update" | "delete",
+  table: string,
+  options: CompileOptions,
+): string {
+  if (!cols || cols.length === 0) return head;
+  const empty: ColumnHome = { unique: new Map() };
+  const rendered = cols.map((it) => {
+    if (it.type === "star") return "*";
+    if (it.type === "qstar") return `${it.table}.*`;
+    const expr = emitExpr(it.expr, empty);
+    return it.alias ? `${expr} AS ${it.alias}` : expr;
+  });
+  const tail = options.returning
+    ? options.returning({ verb, table, cols: rendered })
+    : `RETURNING ${rendered.join(", ")}`;
+  return tail ? `${head} ${tail}` : head;
 }
 
 /* ---------- Expressions ---------- */
@@ -352,24 +376,36 @@ function emitExpr(e: Expr, home: ColumnHome): string {
       return `(${emitExpr(e.expr, home)})`;
     case "compare":
       return `${emitExpr(e.left, home)} ${e.op} ${emitExpr(e.right, home)}`;
-    case "like": {
-      const v = e.pattern.value;
-      const pattern = v.includes("%") ? v : `%${v}%`;
-      return `${emitExpr(e.col, home)} LIKE ${sqlString(pattern)}`;
+    case "like":
+      return emitLike(e, home, "LIKE");
+    case "in":
+      return emitIn(e, home, "IN");
+    case "exists":
+      return `EXISTS (${compile(e.query, currentOptions)})`;
+    case "case": {
+      const whens = e.whens
+        .map(
+          (w) =>
+            `WHEN ${emitExpr(w.when, home)} THEN ${emitExpr(w.then, home)}`,
+        )
+        .join(" ");
+      const elseSql =
+        e.else != null ? ` ELSE ${emitExpr(e.else, home)}` : "";
+      return `CASE ${whens}${elseSql} END`;
     }
-    case "in": {
-      const left = emitExpr(e.col, home);
-      switch (e.source.kind) {
-        case "list": {
-          const list = e.source.items.map((lit) =>
-            lit.type === "num" ? String(lit.value) : sqlString(lit.value),
-          );
-          return `${left} IN (${list.join(", ")})`;
-        }
-        case "ref":
-          return `${left} IN (SELECT * FROM ${e.source.name})`;
-        case "subquery":
-          return `${left} IN (${compile(e.source.query, currentOptions)})`;
+    case "coalesce":
+      return `COALESCE(${e.items.map((x) => emitExpr(x, home)).join(", ")})`;
+    case "not": {
+      const inner = e.expr;
+      switch (inner.type) {
+        case "in":
+          return emitIn(inner, home, "NOT IN");
+        case "like":
+          return emitLike(inner, home, "NOT LIKE");
+        case "exists":
+          return `NOT EXISTS (${compile(inner.query, currentOptions)})`;
+        default:
+          return `NOT (${emitExpr(inner, home)})`;
       }
     }
     case "and":
@@ -377,6 +413,36 @@ function emitExpr(e: Expr, home: ColumnHome): string {
     case "or":
       return e.items.map((x) => wrapBool(x, home)).join(" OR ");
   }
+}
+
+function emitIn(
+  e: Extract<Expr, { type: "in" }>,
+  home: ColumnHome,
+  op: string,
+): string {
+  const left = emitExpr(e.col, home);
+  switch (e.source.kind) {
+    case "list": {
+      const list = e.source.items.map((lit) =>
+        lit.type === "num" ? String(lit.value) : sqlString(lit.value),
+      );
+      return `${left} ${op} (${list.join(", ")})`;
+    }
+    case "ref":
+      return `${left} ${op} (SELECT * FROM ${e.source.name})`;
+    case "subquery":
+      return `${left} ${op} (${compile(e.source.query, currentOptions)})`;
+  }
+}
+
+function emitLike(
+  e: Extract<Expr, { type: "like" }>,
+  home: ColumnHome,
+  op: string,
+): string {
+  const v = e.pattern.value;
+  const pattern = v.includes("%") ? v : `%${v}%`;
+  return `${emitExpr(e.col, home)} ${op} ${sqlString(pattern)}`;
 }
 
 function wrapBool(e: Expr, home: ColumnHome): string {

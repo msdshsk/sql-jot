@@ -22,8 +22,15 @@ SelectQuery
   = main:MainQuery { return { kind: "select", main }; }
 
 InsertQuery
-  = "+" _ tbl:TableRef cols:InsertColList? _ "<" _ values:InsertValues {
-      return { kind: "insert", table: tbl, cols: cols || null, values };
+  = "+" _ tbl:TableRef cols:InsertColList? _ "<" _ values:InsertValues
+    returning:(_ @ReturningClause)? {
+      return {
+        kind: "insert",
+        table: tbl,
+        cols: cols || null,
+        values,
+        returning: returning || null,
+      };
     }
 
 InsertColList
@@ -53,12 +60,15 @@ SimpleAssign
   = col:Identifier _ "=" _ value:Atom { return { col, value }; }
 
 UpdateQuery
-  = "=" _ tbl:TableRef _ "<" _ assigns:UpdateAssignList where:(_ @WhereClause)? {
+  = "=" _ tbl:TableRef _ "<" _ assigns:UpdateAssignList
+    where:(_ @WhereClause)?
+    returning:(_ @ReturningClause)? {
       return {
         kind: "update",
         table: tbl,
         assigns,
         where: where ? where.value : null,
+        returning: returning || null,
       };
     }
 
@@ -74,13 +84,19 @@ UpdateAssignOp
   = "+=" / "-=" / "*=" / "/=" / "="
 
 DeleteQuery
-  = "-" _ tbl:TableRef where:(_ @WhereClause)? {
+  = "-" _ tbl:TableRef
+    where:(_ @WhereClause)?
+    returning:(_ @ReturningClause)? {
       return {
         kind: "delete",
         table: tbl,
         where: where ? where.value : null,
+        returning: returning || null,
       };
     }
+
+ReturningClause
+  = ">" cols:ColList { return cols; }
 
 CTEBlock
   = first:CTEDef rest:(_ "," _ @CTEDef)* (_ ",")? {
@@ -190,16 +206,23 @@ AndExpr
   = first:Predicate rest:(_ "," _ @Predicate)* { return flatAnd([first, ...rest]); }
 
 Predicate
+  = "!" _ p:NegatablePredicate { return { type: "not", expr: p }; }
+  / NegatablePredicate
+  / left:Atom op:CompareOp right:Atom {
+      return { type: "compare", left, op, right };
+    }
+  / Atom
+
+NegatablePredicate
   = col:QualifiedId "[" _ source:InSource _ "]" {
       return { type: "in", col, source };
     }
   / col:QualifiedId "%" pattern:StringLiteral {
       return { type: "like", col, pattern };
     }
-  / left:Atom op:CompareOp right:Atom {
-      return { type: "compare", left, op, right };
+  / "^(" _ q:Start _ ")" {
+      return { type: "exists", query: q };
     }
-  / Atom
 
 InSource
   = "(" _ q:Start _ ")" { return { kind: "subquery", query: q }; }
@@ -218,9 +241,39 @@ CompareOp
 Atom
   = NumberLiteral
   / StringLiteral
+  / CaseExpr
   / FunctionCall
   / QualifiedId
   / "(" _ expr:OrExpr _ ")" { return { type: "group", expr }; }
+
+CaseExpr
+  = "?{" _ body:TernaryExpr _ "}" { return body; }
+
+TernaryExpr
+  = cond:CoalesceExpr _ "?" _ then:TernaryExpr _ ":" _ tail:TernaryExpr {
+      if (tail && tail.type === "case") {
+        return {
+          type: "case",
+          whens: [{ when: cond, then }, ...tail.whens],
+          else: tail.else,
+        };
+      }
+      return { type: "case", whens: [{ when: cond, then }], else: tail };
+    }
+  / CoalesceExpr
+
+CoalesceExpr
+  = first:OrExpr rest:(_ "??" _ @OrExpr)* {
+      if (rest.length === 0) return first;
+      const items = [first, ...rest];
+      // flatten: if any item is itself a coalesce, splice it in
+      const flat = [];
+      for (const it of items) {
+        if (it && it.type === "coalesce") flat.push(...it.items);
+        else flat.push(it);
+      }
+      return { type: "coalesce", items: flat };
+    }
 
 FunctionCall
   = name:Identifier "(" _ args:FuncArgList? _ ")" {

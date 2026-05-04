@@ -99,6 +99,11 @@ function detectTrigger(input: string, prefixStart: number): Trigger {
   // Look at the char immediately before the prefix (skip spaces).
   let i = prefixStart - 1;
   while (i >= 0 && /\s/.test(input[i]!)) i--;
+  // `!` is the NOT marker — transparent for context purposes.
+  if (i >= 0 && input[i] === "!") {
+    i--;
+    while (i >= 0 && /\s/.test(input[i]!)) i--;
+  }
   if (i < 0) return { kind: "table" };
   const ch = input[i]!;
 
@@ -116,6 +121,7 @@ function detectTrigger(input: string, prefixStart: number): Trigger {
       return { kind: "column" };
     case "+":
     case "-":
+    case "(":
       return { kind: "table" };
     case "@":
       return { kind: "alias" };
