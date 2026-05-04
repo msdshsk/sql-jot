@@ -19,7 +19,31 @@ QueryBody
   / SelectQuery
 
 SelectQuery
-  = main:MainQuery { return { kind: "select", main }; }
+  = chain:SetOpChain {
+      return chain.kind === "setop"
+        ? chain
+        : { kind: "select", main: chain };
+    }
+
+// Composes one or more MainQueries with set operators.
+// Returns either a bare MainQuery (when no operator) or a SetOpBody.
+SetOpChain
+  = first:MainQuery rest:(_ op:SetOp _ q:MainQuery { return { op, q }; })* {
+      if (rest.length === 0) return first;
+      return {
+        kind: "setop",
+        operands: [first, ...rest.map(r => r.q)],
+        ops: rest.map(r => r.op),
+      };
+    }
+
+SetOp
+  = "||*" { return "union_all"; }
+  / "||"  { return "union"; }
+  / "&&*" { return "intersect_all"; }
+  / "&&"  { return "intersect"; }
+  / "\\\\*" { return "except_all"; }
+  / "\\\\"  { return "except"; }
 
 InsertQuery
   = "+" _ tbl:TableRef cols:InsertColList? _ "<" _ values:InsertValues
@@ -104,7 +128,7 @@ CTEBlock
     }
 
 CTEDef
-  = "{" _ body:MainQuery _ "}" "@" name:Identifier {
+  = "{" _ body:SetOpChain _ "}" "@" name:Identifier {
       return { name, body };
     }
 

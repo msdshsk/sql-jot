@@ -12,6 +12,8 @@ import type {
   Query,
   SchemaResolver,
   SelectItem,
+  SetOpBody,
+  SetOpKind,
   TableRef,
   UpdateBody,
 } from "./types.js";
@@ -45,6 +47,9 @@ function compileInner(query: Query, options: CompileOptions): string {
     case "select":
       parts.push(emitMain(query.body.main, query.ctes, options));
       break;
+    case "setop":
+      parts.push(emitSetOp(query.body, query.ctes, options));
+      break;
     case "insert":
       parts.push(emitInsert(query.body, options));
       break;
@@ -62,10 +67,41 @@ function compileInner(query: Query, options: CompileOptions): string {
 /* ---------- CTE ---------- */
 
 function emitCTEs(ctes: CTE[], options: CompileOptions): string {
-  const defs = ctes.map(
-    (c) => `${c.name} AS (${emitMain(c.body, [], options)})`,
-  );
+  const defs = ctes.map((c) => {
+    const inner = isSetOpBody(c.body)
+      ? emitSetOp(c.body, [], options)
+      : emitMain(c.body, [], options);
+    return `${c.name} AS (${inner})`;
+  });
   return `WITH ${defs.join(", ")}`;
+}
+
+function isSetOpBody(body: MainQuery | SetOpBody): body is SetOpBody {
+  return "kind" in body && body.kind === "setop";
+}
+
+/* ---------- Set operations ---------- */
+
+const SET_OP_KEYWORD: Record<SetOpKind, string> = {
+  union: "UNION",
+  union_all: "UNION ALL",
+  intersect: "INTERSECT",
+  intersect_all: "INTERSECT ALL",
+  except: "EXCEPT",
+  except_all: "EXCEPT ALL",
+};
+
+function emitSetOp(
+  body: SetOpBody,
+  ctes: CTE[],
+  options: CompileOptions,
+): string {
+  const parts: string[] = [emitMain(body.operands[0]!, ctes, options)];
+  for (let i = 0; i < body.ops.length; i++) {
+    parts.push(SET_OP_KEYWORD[body.ops[i]!]);
+    parts.push(emitMain(body.operands[i + 1]!, ctes, options));
+  }
+  return parts.join(" ");
 }
 
 /* ---------- SELECT / main query ---------- */

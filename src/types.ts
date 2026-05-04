@@ -71,7 +71,8 @@ export interface MainQuery {
 
 export interface CTE {
   name: string;
-  body: MainQuery;
+  /** A CTE may be a single SELECT (MainQuery) or a setop chain. */
+  body: MainQuery | SetOpBody;
 }
 
 export interface SimpleAssign {
@@ -94,6 +95,22 @@ export type InsertValues =
 export interface SelectBody {
   kind: "select";
   main: MainQuery;
+}
+
+export type SetOpKind =
+  | "union"
+  | "union_all"
+  | "intersect"
+  | "intersect_all"
+  | "except"
+  | "except_all";
+
+export interface SetOpBody {
+  kind: "setop";
+  /** length >= 2 — at least two operands compose a setop body */
+  operands: MainQuery[];
+  /** length === operands.length - 1; ops[i] joins operands[i] and operands[i+1] */
+  ops: SetOpKind[];
 }
 
 export interface InsertBody {
@@ -119,7 +136,12 @@ export interface DeleteBody {
   returning: SelectItem[] | null;
 }
 
-export type QueryBody = SelectBody | InsertBody | UpdateBody | DeleteBody;
+export type QueryBody =
+  | SelectBody
+  | SetOpBody
+  | InsertBody
+  | UpdateBody
+  | DeleteBody;
 
 export interface Query {
   type: "query";

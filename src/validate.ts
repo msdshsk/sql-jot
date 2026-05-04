@@ -5,6 +5,7 @@ import type {
   Query,
   SchemaResolver,
   SelectItem,
+  SetOpBody,
   TableRef,
   ValidationIssue,
 } from "./types.js";
@@ -20,11 +21,23 @@ export function validate(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const cte of query.ctes) {
-    walkMain(cte.body, resolver, issues, /*ctes for impl FROM*/ []);
+    if (isSetOpBody(cte.body)) {
+      for (const op of cte.body.operands) {
+        walkMain(op, resolver, issues, /*ctes for impl FROM*/ []);
+      }
+    } else {
+      walkMain(cte.body, resolver, issues, []);
+    }
   }
+  const cteNames = query.ctes.map((c) => c.name);
   switch (query.body.kind) {
     case "select":
-      walkMain(query.body.main, resolver, issues, query.ctes.map((c) => c.name));
+      walkMain(query.body.main, resolver, issues, cteNames);
+      break;
+    case "setop":
+      for (const op of query.body.operands) {
+        walkMain(op, resolver, issues, cteNames);
+      }
       break;
     case "insert":
       walkTable(query.body.table, resolver, issues);
@@ -288,6 +301,10 @@ function checkQualifiedColumn(
       ref: { kind: "column", name: col },
     });
   }
+}
+
+function isSetOpBody(body: MainQuery | SetOpBody): body is SetOpBody {
+  return "kind" in body && body.kind === "setop";
 }
 
 // Stop unused-_ import warning when we only re-export Join/SelectItem types.

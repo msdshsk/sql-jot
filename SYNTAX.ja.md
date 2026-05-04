@@ -2,7 +2,7 @@
 
 > [English](SYNTAX.md) | 日本語
 
-最後にまとめた日: 2026-05-05（RETURNING / CASE / null+真偽値 / count(\*) / DISTINCT / BETWEEN追加）
+最後にまとめた日: 2026-05-05（RETURNING / CASE / null+真偽値 / count(\*) / DISTINCT / BETWEEN / 集合演算追加）
 
 このドキュメントは、現状実装されている sql-jot の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
 
@@ -53,6 +53,9 @@
 | `??` | NULL合体（チェーンで `COALESCE(...)` に展開） | `?{a??b??"x"}` |
 | `\|>` | `SELECT DISTINCT`（`>` を置換）／ 関数引数内の `DISTINCT` | `users\|>name`, `count(\|>uid)` |
 | `~[ , ]` | BETWEEN（`!` 前置で NOT BETWEEN） | `?age~[18,65]`, `?!age~[18,65]` |
+| `\|\|` `\|\|*` | UNION ／ UNION ALL（2つのSELECT間） | `a>id \|\| b>id`, `a>id \|\|* b>id` |
+| `&&` `&&*` | INTERSECT ／ INTERSECT ALL | `orders>uid && reviews>uid` |
+| `\\\\` `\\\\*` | EXCEPT ／ EXCEPT ALL | `products>id \\\\ ordered>pid` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -338,6 +341,59 @@ hookが空文字を返すと末尾は出力されない。
 
 - メインクエリで FROM が省略され、かつ CTE が**1つだけ**なら、その CTE alias が暗黙の FROM になる
 - CTE は CUD 動詞の前にも書ける: `{...}@s+target<(s>...)`
+- CTE 本体自体が集合演算チェーンになっていてもよい（§6.5）:
+  `{a>id || b>id}@all_ids, all_ids>*`
+
+---
+
+## 6.5 集合演算
+
+2つ以上の `MainQuery` を**二重化記号**でつないで合成する。各演算子に
+`*` 接尾辞付きの `ALL` 版がある。記号単独形は SQL 慣習通り DISTINCT。
+
+| sql-jot | SQL |
+|---|---|
+| `Q1 \|\| Q2` | `Q1 UNION Q2` |
+| `Q1 \|\|* Q2` | `Q1 UNION ALL Q2` |
+| `Q1 && Q2` | `Q1 INTERSECT Q2` |
+| `Q1 &&* Q2` | `Q1 INTERSECT ALL Q2` |
+| `Q1 \\ Q2` | `Q1 EXCEPT Q2` |
+| `Q1 \\* Q2` | `Q1 EXCEPT ALL Q2` |
+
+```
+users>id?dept="A" || users>id?dept="B"
+→ SELECT id FROM users WHERE dept = 'A'
+  UNION
+  SELECT id FROM users WHERE dept = 'B'
+
+orders>user_id?status="completed" && reviews>user_id?published=true
+→ SELECT user_id FROM orders WHERE status = 'completed'
+  INTERSECT
+  SELECT user_id FROM reviews WHERE published = TRUE
+
+products>id \\ order_items>product_id
+→ SELECT id FROM products
+  EXCEPT
+  SELECT product_id FROM order_items
+```
+
+**ルール**:
+
+- **演算子周りの空白は任意**: `a>id||b>id` は `a>id || b>id` と同一にパース。
+  長くなったら見やすさのために空白を入れる
+- **左から右に評価**: `Q1 || Q2 && Q3` は `(Q1 UNION Q2) INTERSECT Q3`。
+  SQL標準は INTERSECT の方が結合度高いが、混在チェーンは実務でほぼ書かない＆
+  書くなら明示が普通なので簡略化。優先順位を制御したい場合は CTE で因数分解：
+  `{Q2 && Q3}@a, Q1 || a>*`
+- **CTE は最上位に1回だけ**: チェーン全体に効く。オペランドごとの個別 WITH は
+  非サポート
+- **集合演算は SELECT のみ**: `+t<a=1 || ...` はパースエラー。
+  INSERT に UNION を流したい場合は INSERT-SELECT で:
+  `+t<(a>id || b>id)`
+- **末尾の ORDER BY / LIMIT** は AST 上は最後のオペランドの MainQuery に
+  付くが、SQL 出力ではチェーン全体の末尾に来る。SQL の「ORDER BY は
+  union 全体に効く」セマンティクスと一致するので問題なし。
+  特定オペランドにだけ ORDER したい場合は CTE で囲む（稀なケース）
 
 ---
 
@@ -744,6 +800,9 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `\|>` | SELECT節の先頭 | `SELECT DISTINCT` |
 | `\|>` | 関数引数の先頭 | 集約内 `DISTINCT` |
 | `~[ , ]` | predicate 内、列の直後 | BETWEEN |
+| `\|\|` `\|\|*` | 2つの SELECT MainQuery の間 | UNION ／ UNION ALL |
+| `&&` `&&*` | 2つの SELECT MainQuery の間 | INTERSECT ／ INTERSECT ALL |
+| `\\` `\\*` | 2つの SELECT MainQuery の間 | EXCEPT ／ EXCEPT ALL |
 | `^(` | WHERE/HAVING内 | EXISTS サブクエリ |
 | `!` | 述語（IN / LIKE / EXISTS）の直前 | NOTマーカー |
 | `!=` | 2つのAtomの間 | 不等比較 |
@@ -776,7 +835,6 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | 複数CTE のテストカバレッジ | 薄い | 文法は対応 |
 | validate の位置情報 | 未対応 | 名前のみ返す |
 | `BETWEEN`/`IS NULL` 等の独自短縮 | 未設計 | |
-| UNION / UNION ALL | 未対応 | |
 | WINDOW 関数 | 未対応 | |
 
 ---
@@ -829,6 +887,19 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
   競合しない。括弧で2要素を囲むことで「2つの値」を明示し、IN の `[ ... ]`
   （`~` 前置なし）と区別される。NOT BETWEEN は既存の `!` マーカーを再利用し、
   IN / LIKE / EXISTS / BETWEEN の否定構文を統一
+- **二重化記号（`||`、`&&`、`\\`）で集合演算**: 単独形は式中の OR (`|`) と
+  衝突したり打ち間違えやすい。二重化は単一の MainQuery 内には現れないので、
+  最上位の境界マーカーとして曖昧性ゼロ。EXCEPT の `\\` は数学の集合差
+  記法 `A \ B` から。`^` は二重に駄目（XOR=対称差≠EXCEPT、かつEXISTS済み）
+  なので意図的に避ける。`*` 接尾辞 = ALL は「全部入り（重複含む）」の
+  ニュアンスで、既存の「*=全部」モチーフと一致
+- **集合演算は SQL 既定の DISTINCT 寄り**: `||` = `UNION`（DISTINCT）、
+  `||*` = `UNION ALL`。UNION では ALL が実務上多いが、INTERSECT/EXCEPT
+  では DISTINCT が大多数なので、SQL 既定に揃えて3演算子で挙動を統一
+- **集合演算チェーンは左から右、SQL 優先順位は採用しない**: SQL 標準では
+  INTERSECT が UNION/EXCEPT より結合度高いが、混在クエリは実務でほぼ
+  明示括弧と一緒に書かれる。sql-jot は最上位レベルの括弧グルーピングを
+  まだサポートしないので、優先順位制御は CTE 因数分解で対応
 
 ### 12.1 演算子の語呂シート
 
@@ -858,6 +929,10 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `??` | PHP/C# のNULL合体演算子をそのまま流用 |
 | `\|>` | 絞られたパイプ → DISTINCT（重複を除いた射出） |
 | `~[ , ]` | 日本語の「〜」（から〜まで）→ BETWEEN |
+| `\|\|` | OR の二重化 → 集合 OR（UNION） |
+| `&&` | AND の二重化 → 集合 AND（INTERSECT） |
+| `\\` | 数学の `A \ B`（集合差）から → EXCEPT |
+| `*`（演算子接尾辞） | 「全部入り（重複含む）」→ ALL 系 |
 
 ---
 

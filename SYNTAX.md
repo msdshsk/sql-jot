@@ -2,7 +2,7 @@
 
 > English | [日本語](SYNTAX.ja.md)
 
-Last updated: 2026-05-05 (RETURNING / CASE / null+bool / count(\*) / DISTINCT / BETWEEN)
+Last updated: 2026-05-05 (RETURNING / CASE / null+bool / count(\*) / DISTINCT / BETWEEN / set-ops)
 
 This document covers the full grammar and semantics of sql-jot as currently
 implemented. If the implementation and this doc disagree, **the implementation
@@ -56,6 +56,9 @@ unambiguously.
 | `??` | null-coalesce (chains into `COALESCE(...)`) | `?{a??b??"x"}` |
 | `\|>` | `SELECT DISTINCT` (replaces `>`) ／ `DISTINCT` inside func arg | `users\|>name`, `count(\|>uid)` |
 | `~[ , ]` | BETWEEN (with `!` prefix → NOT BETWEEN) | `?age~[18,65]`, `?!age~[18,65]` |
+| `\|\|` `\|\|*` | UNION ／ UNION ALL between two SELECTs | `a>id \|\| b>id`, `a>id \|\|* b>id` |
+| `&&` `&&*` | INTERSECT ／ INTERSECT ALL | `orders>uid && reviews>uid` |
+| `\\\\` `\\\\*` | EXCEPT ／ EXCEPT ALL | `products>id \\\\ ordered>pid` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -342,6 +345,63 @@ Returning an empty string from the hook suppresses the trailing tail.
 - If the main query has no FROM and there's exactly **one** CTE, that CTE
   becomes the implicit FROM
 - A CTE block can also precede a CUD verb: `{...}@s+target<(s>...)`
+- A CTE body can itself be a set-op chain (see §6.5):
+  `{a>id || b>id}@all_ids, all_ids>*`
+
+---
+
+## 6.5 Set operations
+
+Two or more `MainQuery` operands can be composed with **doubled-character
+operators** between them. Each operator has an `*`-suffixed `ALL` variant.
+The bare form follows SQL's `DISTINCT`-default convention.
+
+| sql-jot | SQL |
+|---|---|
+| `Q1 \|\| Q2` | `Q1 UNION Q2` |
+| `Q1 \|\|* Q2` | `Q1 UNION ALL Q2` |
+| `Q1 && Q2` | `Q1 INTERSECT Q2` |
+| `Q1 &&* Q2` | `Q1 INTERSECT ALL Q2` |
+| `Q1 \\ Q2` | `Q1 EXCEPT Q2` |
+| `Q1 \\* Q2` | `Q1 EXCEPT ALL Q2` |
+
+```
+users>id?dept="A" || users>id?dept="B"
+→ SELECT id FROM users WHERE dept = 'A'
+  UNION
+  SELECT id FROM users WHERE dept = 'B'
+
+orders>user_id?status="completed" && reviews>user_id?published=true
+→ SELECT user_id FROM orders WHERE status = 'completed'
+  INTERSECT
+  SELECT user_id FROM reviews WHERE published = TRUE
+
+products>id \\ order_items>product_id
+→ SELECT id FROM products
+  EXCEPT
+  SELECT product_id FROM order_items
+```
+
+**Rules**:
+
+- **Whitespace around the operator is optional**: `a>id||b>id` parses
+  identically to `a>id || b>id`. Use spaces for readability when the
+  query is long.
+- **Left-to-right evaluation**: `Q1 || Q2 && Q3` is `(Q1 UNION Q2)
+  INTERSECT Q3`, not the SQL-standard precedence (which would bind
+  INTERSECT tighter). For mixed-operator chains where precedence matters,
+  factor through CTEs:
+  `{Q2 && Q3}@a, Q1 || a>*`.
+- **CTEs are top-level only**: a single `WITH` block precedes the whole
+  chain and is visible to every operand. Per-operand `WITH` is not
+  supported.
+- **Set operations only compose SELECTs**: `+t<a=1 || ...` is a parse
+  error. To `INSERT ... UNION ...`, use the existing INSERT-SELECT form
+  with the union as the source: `+t<(a>id || b>id)`.
+- **ORDER BY / LIMIT at the end** of the chain attach to the final
+  operand's MainQuery in the AST, but in SQL output they sit after the
+  whole chain — which matches SQL's "ORDER BY applies to the union"
+  semantics. To order *one* operand (rare), wrap that operand in a CTE.
 
 ---
 
@@ -775,6 +835,9 @@ the current scope.
 | `\|>` | leading the SELECT clause | `SELECT DISTINCT` |
 | `\|>` | leading a function arg | `DISTINCT` inside the aggregate |
 | `~[ , ]` | after a column in a predicate | BETWEEN |
+| `\|\|` `\|\|*` | between two SELECT MainQueries | UNION ／ UNION ALL |
+| `&&` `&&*` | between two SELECT MainQueries | INTERSECT ／ INTERSECT ALL |
+| `\\` `\\*` | between two SELECT MainQueries | EXCEPT ／ EXCEPT ALL |
 | `^(` | inside WHERE/HAVING | EXISTS subquery |
 | `!` | leading a predicate (IN / LIKE / EXISTS) | NOT marker |
 | `!=` | between two atoms | not-equal comparison |
@@ -807,7 +870,6 @@ word boundary. See §7.1 for the comparison-rewrite rules.
 | Multi-CTE test coverage | Thin | Grammar supports it |
 | Source positions in `validate` | Not supported | Names only |
 | Shorthand for `BETWEEN` / `IS NULL` | Not designed | |
-| UNION / UNION ALL | Not supported | |
 | Window functions | Not supported | |
 
 ---
@@ -879,6 +941,24 @@ to prevent re-litigation later.
   "two values" without ambiguity vs the IN list (which has no `~`
   prefix). NOT BETWEEN piggybacks on the existing `!` marker, keeping
   the negation surface uniform across IN / LIKE / EXISTS / BETWEEN
+- **Doubled-char operators (`||`, `&&`, `\\`) for set ops**: single-char
+  versions clash with intra-expression OR (`|`) or are too easily
+  mistyped. Doubled chars don't appear inside any single MainQuery, so
+  they unambiguously mark a top-level boundary. `\\` for EXCEPT borrows
+  from set-difference notation `A \ B` in math. `^` was deliberately
+  not used for EXCEPT — XOR is symmetric difference, EXCEPT is
+  asymmetric, plus `^` is already EXISTS. `*`-suffix for `ALL` reads as
+  "all of them, with duplicates" and matches the existing `*` motif for
+  "all"
+- **Set ops follow SQL's DISTINCT-default**: `||` is `UNION` (DISTINCT),
+  `||*` is `UNION ALL`. ALL is more common in practice for UNION but
+  rarer for INTERSECT/EXCEPT, so picking SQL's default keeps behavior
+  uniform across the three operators
+- **Set-op chain is left-to-right, no SQL precedence**: SQL standard
+  binds INTERSECT tighter than UNION/EXCEPT, but mixed-operator chains
+  in real queries are rare and almost always written with explicit
+  parens. sql-jot doesn't support top-level parens for set-op grouping
+  yet; users factor through CTEs when precedence matters
 
 ### 12.1 Operator mnemonics
 
@@ -909,6 +989,10 @@ re-derive it.
 | `??` | PHP/C# null-coalesce, reused literally |
 | `\|>` | narrowed pipe → DISTINCT (filtered outflow) |
 | `~[ , ]` | tilde reads as "from-to" in JP typography → BETWEEN |
+| `\|\|` | doubled OR → set-OR (UNION) |
+| `&&` | doubled AND → set-AND (INTERSECT) |
+| `\\` | math notation `A \ B` for set difference → EXCEPT |
+| `*` (op suffix) | "all of them, with duplicates" → ALL variant |
 
 ---
 
