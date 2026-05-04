@@ -52,4 +52,42 @@ export const EXAMPLES: Example[] = [
     label: "in subquery",
     source: '{audits>user_id?action="login"}@hot+users@u?u.id[hot]',
   },
+  {
+    label: "case when",
+    source:
+      'users>name,?{created_at>"2025-01-01"?"new":"old"}@cohort',
+  },
+  {
+    label: "count(*) + having",
+    source: "orders#user_id>user_id,count(*)@n:n>3",
+  },
+  {
+    label: "exists",
+    source: "users?^(orders?total>100)",
+  },
+  {
+    label: "not in + between",
+    source:
+      'users?!id[1,2,3],created_at~["2025-01-01","2026-12-31"]',
+  },
+  {
+    label: "distinct aggregate",
+    source: "orders>count(|>user_id)@uniq_users",
+  },
+  {
+    label: "null check (IS NULL)",
+    source: "users?email=null",
+  },
+  {
+    label: "union",
+    source: "users>id || audits>user_id",
+  },
+  {
+    label: "except (orphans)",
+    source: "users>id \\\\ orders>user_id",
+  },
+  {
+    label: "returning",
+    source: '+users<name="charlie">id,created_at',
+  },
 ];
