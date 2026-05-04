@@ -41,18 +41,37 @@ expand("+users<name=\"alice\",age=30");
 
 expand("=users<count+=1?id=5");
 // → "UPDATE users SET count = count + 1 WHERE id = 5"
+
+expand("users?^(orders?user_id=1)");
+// → "SELECT * FROM users WHERE EXISTS (SELECT * FROM orders WHERE user_id = 1)"
+
+expand("users?!status[\"deleted\",\"banned\"]");
+// → "SELECT * FROM users WHERE status NOT IN ('deleted', 'banned')"
+
+expand("+users<name=\"alice\">id,created_at");
+// → "INSERT INTO users (name) VALUES ('alice') RETURNING id, created_at"
+
+expand('users>?{score>=80?"pass":"fail"}@result');
+// → "SELECT CASE WHEN score >= 80 THEN 'pass' ELSE 'fail' END AS result FROM users"
+
+expand('users>?{nickname??"anon"}@display');
+// → "SELECT COALESCE(nickname, 'anon') AS display FROM users"
 ```
 
 ## Syntax at a glance
 
 | Symbol | Role | Sample |
 |---|---|---|
-| `>` | SELECT columns | `users>name,email` |
+| `>` | SELECT columns / RETURNING (trailing CUD) | `users>name`, `+users<...>id` |
 | `?` | WHERE | `?id=1` |
 | `+` | JOIN (or INSERT verb) | `+orders[u.id=o.user_id]` |
 | `[ ]` | ON / IN | `?id[1,2,3]`, `?id[(subq)]` |
 | `( )` | subquery / column list | `+users<(other>name?active=1)` |
 | `{ }` | CTE / row block | `{src>id}@s` |
+| `^( )` | EXISTS subquery | `?^(orders?user_id=1)` |
+| `!` | NOT marker (IN / LIKE / EXISTS) | `?!id[1,2,3]`, `?!^(...)` |
+| `?{ }` | CASE block (PHP-style ternary inside) | `?{x>0?"pos":"neg"}` |
+| `??` | null-coalesce (chains into COALESCE) | `?{a??b??"x"}` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -129,10 +148,26 @@ quick-load samples, validation markers and `Tab` prefix expansion.
 
 ## Status
 
-v0.0.1. The core covers SELECT/INSERT/UPDATE/DELETE, CTE, JOINs (INNER/
-LEFT/RIGHT/FULL/CROSS), schema-driven JOIN inference, three-way IN, and
-qualified-star. See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for
-unimplemented features.
+The core covers:
+
+- SELECT / INSERT / UPDATE / DELETE, with **`RETURNING`** as trailing `>cols`
+  (PostgreSQL-style; `CompileOptions.returning` hook for MySQL/SQL Server)
+- CTE blocks (`{...}@name`), multiple CTEs, optional FROM
+- JOINs: INNER / LEFT / RIGHT / FULL / CROSS, with FK auto-resolve and
+  multi-hop inference
+- IN with literal list / table-or-CTE reference / parenthesized subquery
+- **EXISTS / NOT EXISTS** via `^(...)` and `!^(...)`
+- **NOT IN / NOT LIKE** via `!` prefix
+- **CASE WHEN** via `?{cond?then:else}` (PHP-style ternary; right-recursive
+  chains collapse to flat multi-arm CASE)
+- **COALESCE** via `??` chains inside `?{...}`
+- Implicit column qualification, schema-aware validation, completion
+  candidates, qualified-star (`t.*`)
+
+See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for the current limitation
+list. Notably absent: `IS NULL`, `BETWEEN`, `DISTINCT`, set operations
+(`UNION`/`INTERSECT`/`EXCEPT`), arithmetic in expressions, window
+functions, recursive CTE.
 
 ## Development
 

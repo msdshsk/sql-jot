@@ -40,18 +40,37 @@ expand("+users<name=\"alice\",age=30");
 
 expand("=users<count+=1?id=5");
 // → "UPDATE users SET count = count + 1 WHERE id = 5"
+
+expand("users?^(orders?user_id=1)");
+// → "SELECT * FROM users WHERE EXISTS (SELECT * FROM orders WHERE user_id = 1)"
+
+expand("users?!status[\"deleted\",\"banned\"]");
+// → "SELECT * FROM users WHERE status NOT IN ('deleted', 'banned')"
+
+expand("+users<name=\"alice\">id,created_at");
+// → "INSERT INTO users (name) VALUES ('alice') RETURNING id, created_at"
+
+expand('users>?{score>=80?"pass":"fail"}@result');
+// → "SELECT CASE WHEN score >= 80 THEN 'pass' ELSE 'fail' END AS result FROM users"
+
+expand('users>?{nickname??"anon"}@display');
+// → "SELECT COALESCE(nickname, 'anon') AS display FROM users"
 ```
 
 ## 演算子早見表
 
 | 記号 | 役割 | 例 |
 |---|---|---|
-| `>` | SELECT列 | `users>name,email` |
+| `>` | SELECT列 ／ RETURNING（CUD末尾） | `users>name`, `+users<...>id` |
 | `?` | WHERE | `?id=1` |
 | `+` | JOIN（または INSERT 動詞） | `+orders[u.id=o.user_id]` |
 | `[ ]` | ON ／ IN | `?id[1,2,3]`, `?id[(subq)]` |
 | `( )` | サブクエリ ／ 列リスト | `+users<(other>name?active=1)` |
 | `{ }` | CTE ／ 行ブロック | `{src>id}@s` |
+| `^( )` | EXISTS サブクエリ | `?^(orders?user_id=1)` |
+| `!` | NOT マーカー（IN / LIKE / EXISTS） | `?!id[1,2,3]`, `?!^(...)` |
+| `?{ }` | CASE ブロック（中身は PHP 風 ternary） | `?{x>0?"pos":"neg"}` |
+| `??` | null合体（チェーンで COALESCE 化） | `?{a??b??"x"}` |
 | `#` | GROUP BY | `#user_id` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at` |
@@ -127,9 +146,23 @@ npm run dev
 
 ## 状況
 
-v0.0.1。SELECT/INSERT/UPDATE/DELETE、CTE、JOIN（INNER/LEFT/RIGHT/FULL/
-CROSS）、スキーマ駆動の JOIN 推論、3形態の IN、qualified star をカバー。
+現状コアでカバーしているもの:
+
+- SELECT / INSERT / UPDATE / DELETE。CUDの末尾 `>cols` で **`RETURNING`**
+  （PostgreSQL流儀。MySQL/SQL Server向けは `CompileOptions.returning` hookで差し替え）
+- CTE（`{...}@name`）、複数CTE、FROM省略
+- JOIN: INNER / LEFT / RIGHT / FULL / CROSS、FK自動解決と多段推論
+- IN: リテラルリスト ／ テーブル/CTE参照 ／ 括弧サブクエリ
+- **EXISTS / NOT EXISTS** — `^(...)` / `!^(...)`
+- **NOT IN / NOT LIKE** — `!` 前置
+- **CASE WHEN** — `?{cond?then:else}`（PHP風 ternary。右再帰チェーンは
+  フラットな多段 CASE に潰す）
+- **COALESCE** — `?{...}` 内の `??` チェーン
+- 暗黙の列修飾、スキーマベース検証、補完候補列挙、qualified-star（`t.*`）
+
 未対応項目は [SYNTAX.ja.md §11](SYNTAX.ja.md#11-v0-の未対応既知の制約) を参照。
+特に未対応な主要機能: `IS NULL`、`BETWEEN`、`DISTINCT`、集合演算
+（`UNION`/`INTERSECT`/`EXCEPT`）、式中の算術、ウィンドウ関数、再帰CTE。
 
 ## 開発
 
