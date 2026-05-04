@@ -14,15 +14,18 @@ export type Expr =
   | { type: "str"; value: string }
   | { type: "null" }
   | { type: "bool"; value: boolean }
+  | { type: "star" }
   | { type: "func"; name: string; args: Expr[] }
   | { type: "group"; expr: Expr }
   | { type: "compare"; left: Expr; op: string; right: Expr }
   | { type: "like"; col: Expr; pattern: { type: "str"; value: string } }
   | { type: "in"; col: Expr; source: InSource }
+  | { type: "between"; col: Expr; low: Expr; high: Expr }
   | { type: "exists"; query: Query }
   | { type: "not"; expr: Expr }
   | { type: "case"; whens: { when: Expr; then: Expr }[]; else: Expr | null }
   | { type: "coalesce"; items: Expr[] }
+  | { type: "distinct"; expr: Expr }
   | { type: "and"; items: Expr[] }
   | { type: "or"; items: Expr[] };
 
@@ -57,6 +60,7 @@ export interface LimitInfo {
 export interface MainQuery {
   from: TableRef | null;
   select: SelectItem[] | null;
+  distinct: boolean;
   joins: Join[];
   where: Expr | null;
   group: Expr[] | null;

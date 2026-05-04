@@ -2,7 +2,7 @@
 
 > English | [日本語](SYNTAX.ja.md)
 
-Last updated: 2026-05-04 (RETURNING / CASE / null+bool literals)
+Last updated: 2026-05-05 (RETURNING / CASE / null+bool / count(\*) / DISTINCT / BETWEEN)
 
 This document covers the full grammar and semantics of sql-jot as currently
 implemented. If the implementation and this doc disagree, **the implementation
@@ -54,6 +54,8 @@ unambiguously.
 | `!` | NOT marker — prefixes IN / LIKE / EXISTS | `?!id[1,2,3]`, `?!^(...)` |
 | `?{ }` | CASE expression (PHP-style ternary inside) | `?{x>0?"pos":"neg"}` |
 | `??` | null-coalesce (chains into `COALESCE(...)`) | `?{a??b??"x"}` |
+| `\|>` | `SELECT DISTINCT` (replaces `>`) ／ `DISTINCT` inside func arg | `users\|>name`, `count(\|>uid)` |
+| `~[ , ]` | BETWEEN (with `!` prefix → NOT BETWEEN) | `?age~[18,65]`, `?!age~[18,65]` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -106,6 +108,24 @@ users@u>u.name,u.email          # qualified columns
 
 If omitted, defaults to `*`.
 
+#### `|>` — DISTINCT prefix
+
+Replace the leading `>` of the SELECT clause with `|>` to emit
+`SELECT DISTINCT`:
+
+```
+users|>dept                     → SELECT DISTINCT dept FROM users
+users|>name,email               → SELECT DISTINCT name, email FROM users
+users|>*                        → SELECT DISTINCT * FROM users
+```
+
+For DISTINCT **inside an aggregate**, use `|>` as a prefix on the
+function argument instead:
+
+```
+orders>count(|>user_id)@uniq    → SELECT count(DISTINCT user_id) AS uniq FROM orders
+```
+
 ### 4.4 WHERE — `?`
 
 ```
@@ -114,9 +134,11 @@ users?age>=18                   # comparison
 users?id<>0                     # inequality
 users?name%"john"               # LIKE
 users?id[1,2,3]                 # IN
+users?age~[18,65]               # BETWEEN
 users?^(orders?user_id=1)       # EXISTS
 users?!id[1,2,3]                # NOT IN
 users?!name%"john"              # NOT LIKE
+users?!age~[18,65]              # NOT BETWEEN
 users?!^(orders?user_id=1)      # NOT EXISTS
 users?a=1,b=2                   # AND (comma)
 users?a=1|b=2                   # OR (pipe)
@@ -389,13 +411,18 @@ u.name       qualified (one dot)
 
 ```
 sum(price)
-count(*)              # NOTE: bare * argument is not yet supported in v0
+count(*)              # bare * is allowed only as a function arg
 coalesce(a,b,c)
 lower(name)
 ```
 
-**Note**: `count(*)` — using `*` as an argument — is unsupported in v0. Use
-`count(id)` or any non-null column.
+`,` between arguments is strictly an arg separator. To pass an AND
+expression as a single argument, wrap it in parens: `func((a,b),c)`.
+
+`*` is permitted only as a function argument (the `count(*)` idiom). In
+any other expression position (`?*`, `?col[*]`, etc.) it's a parse
+error — `*` for "all columns" lives in the SELECT-item grammar, not in
+expressions.
 
 ### 7.4 Comparison
 
@@ -441,7 +468,29 @@ The contents of `[ ]` take one of three forms:
 - The subquery form uses `( ... )` to delimit the inner query. Nested CTEs
   are allowed inside
 
-### 7.7 EXISTS — `^( ... )`
+### 7.7 BETWEEN — `col~[low,high]`
+
+The `~` prefix between a column and a 2-element bracket list emits
+`BETWEEN low AND high` (inclusive, matching SQL):
+
+```
+?age~[18,65]                    → age BETWEEN 18 AND 65
+?date~["2026-01-01","2026-12-31"]
+                                → date BETWEEN '2026-01-01' AND '2026-12-31'
+?total~[min_total,max_total]    → total BETWEEN min_total AND max_total
+?date~[now(),end_date]          → date BETWEEN now() AND end_date
+```
+
+The bounds accept any Atom (literals, identifiers, function calls), but
+not full expression-level `,`-AND or `|`-OR — wrap in parens if needed.
+
+NOT BETWEEN reuses the existing `!` marker:
+
+```
+?!age~[18,65]                   → age NOT BETWEEN 18 AND 65
+```
+
+### 7.8 EXISTS — `^( ... )`
 
 A bare predicate (not bound to any column) that tests whether the inner
 query produces at least one row. The contents of `^( ... )` are an entire
@@ -458,7 +507,7 @@ sql-jot query — anything legal at top level is legal here.
 EXISTS is a predicate, so it composes with `,` (AND) and `|` (OR) like any
 other predicate. It's also valid in HAVING.
 
-### 7.8 NOT — `!` prefix
+### 7.9 NOT — `!` prefix
 
 `!` placed before an IN / LIKE / EXISTS predicate negates it. The marker
 applies to **the immediately following predicate only** — it doesn't propagate
@@ -473,7 +522,7 @@ through `,` or `|`.
 `!` is **not** a general boolean negation in v0 — it's only valid before
 IN / LIKE / EXISTS. `?!a=1` is a parse error.
 
-### 7.9 CASE — `?{ ... }` (PHP-style ternary inside)
+### 7.10 CASE — `?{ ... }` (PHP-style ternary inside)
 
 Inside `?{ ... }` the parser treats the body as a single PHP/C/JS-style
 ternary expression. Right-recursive `?:` chains compile to a flat
@@ -516,7 +565,7 @@ ELSE cannot be omitted (ternary always has both branches). If you want a
 NULL fallback, wait until `null` literals are added in a future round, or
 use a sentinel value.
 
-### 7.10 COALESCE — `??` chain
+### 7.11 COALESCE — `??` chain
 
 `??` inside `?{ ... }` is the null-coalescing operator. Chains flatten into
 a single `COALESCE(...)` call:
@@ -722,6 +771,10 @@ the current scope.
 | `*` | as a single SELECT item | all columns |
 | `*` | as `<ident>.*` | qualified star |
 | `*` | inside a JoinType | FULL JOIN |
+| `*` | as a function argument | the `count(*)` idiom |
+| `\|>` | leading the SELECT clause | `SELECT DISTINCT` |
+| `\|>` | leading a function arg | `DISTINCT` inside the aggregate |
+| `~[ , ]` | after a column in a predicate | BETWEEN |
 | `^(` | inside WHERE/HAVING | EXISTS subquery |
 | `!` | leading a predicate (IN / LIKE / EXISTS) | NOT marker |
 | `!=` | between two atoms | not-equal comparison |
@@ -746,8 +799,6 @@ word boundary. See §7.1 for the comparison-rewrite rules.
 | Item | Status | Notes |
 |---|---|---|
 | Arithmetic in expressions (`a+b`, `a*2`) | Not supported | Only `+= -= *= /=` on the SET right-hand side |
-| `count(*)` `*` argument | Not supported | Use `count(id)` |
-| `BETWEEN` | Not supported | Use `?x>=a,x<=b` |
 | JOINs in UPDATE / DELETE | Not supported | |
 | Correlated subqueries outside IN / EXISTS | Not supported | IN: `[(subq)]`, EXISTS: `^(subq)` |
 | `!` before non-IN/LIKE/EXISTS predicates | Not supported | e.g. `?!a=1` — parse error |
@@ -758,7 +809,6 @@ word boundary. See §7.1 for the comparison-rewrite rules.
 | Shorthand for `BETWEEN` / `IS NULL` | Not designed | |
 | UNION / UNION ALL | Not supported | |
 | Window functions | Not supported | |
-| DISTINCT | Not supported | |
 
 ---
 
@@ -817,6 +867,18 @@ to prevent re-litigation later.
   convention. AND inside an arg requires explicit parens
   (`func((a,b),c)`). Earlier the grammar greedily consumed `,` as AND
   even inside `()`, which made multi-arg `coalesce(a,b)` impossible
+- **`|>` for DISTINCT, both at SELECT level and inside function args**:
+  same prefix, same semantics ("filter out duplicates from this stream
+  of values"), so reusing the marker keeps the surface small. Visually,
+  `|>` reads as a narrowed pipe — the data still flows out, but
+  thinned. The optional `|` is consumed only at clause-boundary, so
+  in-expression `|`-OR is unaffected
+- **`~[low,high]` for BETWEEN**: tilde is the natural "from-to" symbol
+  in Japanese typography (`月〜金`) and isn't strongly bound to any
+  other meaning in English programming. The bracketed pair signals
+  "two values" without ambiguity vs the IN list (which has no `~`
+  prefix). NOT BETWEEN piggybacks on the existing `!` marker, keeping
+  the negation surface uniform across IN / LIKE / EXISTS / BETWEEN
 
 ### 12.1 Operator mnemonics
 
@@ -845,6 +907,8 @@ re-derive it.
 | `!` | borrowed from C-family logical NOT |
 | `?{ }` | "which? block" — ternary case in a block |
 | `??` | PHP/C# null-coalesce, reused literally |
+| `\|>` | narrowed pipe → DISTINCT (filtered outflow) |
+| `~[ , ]` | tilde reads as "from-to" in JP typography → BETWEEN |
 
 ---
 

@@ -2,7 +2,7 @@
 
 > [English](SYNTAX.md) | 日本語
 
-最後にまとめた日: 2026-05-04（RETURNING / CASE / null+真偽値リテラル追加）
+最後にまとめた日: 2026-05-05（RETURNING / CASE / null+真偽値 / count(\*) / DISTINCT / BETWEEN追加）
 
 このドキュメントは、現状実装されている sql-jot の文法と意味論をすべて網羅する。実装と乖離したら**実装が正**、ここを直す。
 
@@ -51,6 +51,8 @@
 | `!` | NOTマーカー — IN / LIKE / EXISTSの前置 | `?!id[1,2,3]`, `?!^(...)` |
 | `?{ }` | CASE式（中身はPHP風ternary） | `?{x>0?"pos":"neg"}` |
 | `??` | NULL合体（チェーンで `COALESCE(...)` に展開） | `?{a??b??"x"}` |
+| `\|>` | `SELECT DISTINCT`（`>` を置換）／ 関数引数内の `DISTINCT` | `users\|>name`, `count(\|>uid)` |
+| `~[ , ]` | BETWEEN（`!` 前置で NOT BETWEEN） | `?age~[18,65]`, `?!age~[18,65]` |
 | `#` | GROUP BY | `users#dept` |
 | `:` | HAVING | `:count>5` |
 | `$` | ORDER BY | `$-created_at,+id` |
@@ -98,6 +100,22 @@ users@u>u.name,u.email          # 修飾列
 
 複数テーブルJOIN下では `t.*` と通常列を混在できる: `a@a+b@b[a.id=b.aid]>a.*,b.x`
 
+#### `|>` — DISTINCT 前置
+
+SELECT の先頭 `>` を `|>` に置き換えると `SELECT DISTINCT` になる:
+
+```
+users|>dept                     → SELECT DISTINCT dept FROM users
+users|>name,email               → SELECT DISTINCT name, email FROM users
+users|>*                        → SELECT DISTINCT * FROM users
+```
+
+**集約関数内**で DISTINCT を使う場合は、関数引数の前に同じ `|>` を置く:
+
+```
+orders>count(|>user_id)@uniq    → SELECT count(DISTINCT user_id) AS uniq FROM orders
+```
+
 **`t.*` の典型用途**:
 JOINした副テーブルをWHERE句のフィルタとしてだけ使い、SELECT結果には主テーブルの列だけ出したい時:
 
@@ -118,9 +136,11 @@ users?age>=18                   # 比較
 users?id<>0                     # 不等
 users?name%"john"               # LIKE
 users?id[1,2,3]                 # IN
+users?age~[18,65]               # BETWEEN
 users?^(orders?user_id=1)       # EXISTS
 users?!id[1,2,3]                # NOT IN
 users?!name%"john"              # NOT LIKE
+users?!age~[18,65]              # NOT BETWEEN
 users?!^(orders?user_id=1)      # NOT EXISTS
 users?a=1,b=2                   # AND（カンマ）
 users?a=1|b=2                   # OR（パイプ）
@@ -385,12 +405,17 @@ u.name       qualified（ドット2段）
 
 ```
 sum(price)
-count(*)              # ※ * を引数に直接書く構文は v0 で未サポート
+count(*)              # 関数引数としての * のみ可
 coalesce(a,b,c)
 lower(name)
 ```
 
-**注**: `count(*)` のような `*` 引数は現状の文法で未サポート。`count(id)` で代用するか、将来拡張。
+引数の `,` は厳密に区切り。AND を1引数として渡したい場合は明示的な括弧を:
+`func((a,b),c)`。
+
+`*` は**関数引数の位置でのみ**許される（`count(*)` イディオム用）。
+それ以外の式位置（`?*`、`?col[*]` など）はパースエラー。
+「全列」の `*` は SELECT 項目側の文法に存在し、式中の `*` とは別経路。
 
 ### 7.4 比較
 
@@ -432,7 +457,28 @@ lower(name)
 - テーブル/CTE参照は単一の裸識別子のみ。`[t.col]` は不可（`[(t>col)]` を使う）
 - サブクエリは `( ... )` で範囲明示。中に CTE もネスト可能
 
-### 7.7 EXISTS — `^( ... )`
+### 7.7 BETWEEN — `col~[low,high]`
+
+列と2要素の `[ ... ]` を `~` で挟むと `BETWEEN low AND high`（両端含む、SQL準拠）:
+
+```
+?age~[18,65]                    → age BETWEEN 18 AND 65
+?date~["2026-01-01","2026-12-31"]
+                                → date BETWEEN '2026-01-01' AND '2026-12-31'
+?total~[min_total,max_total]    → total BETWEEN min_total AND max_total
+?date~[now(),end_date]          → date BETWEEN now() AND end_date
+```
+
+境界値は Atom（リテラル / 識別子 / 関数呼び出し）を受ける。式レベルの
+`,`-AND や `|`-OR は使えないので、必要なら括弧でくくる。
+
+NOT BETWEEN は既存の `!` マーカーを再利用:
+
+```
+?!age~[18,65]                   → age NOT BETWEEN 18 AND 65
+```
+
+### 7.8 EXISTS — `^( ... )`
 
 列に紐づかない述語。内側のクエリが**1行でも返せば真**。`^( ... )` の中身は
 sql-jot のクエリ全体で、トップレベルで書けるものは何でも書ける。
@@ -447,7 +493,7 @@ sql-jot のクエリ全体で、トップレベルで書けるものは何でも
 
 EXISTSは述語なので `,`（AND）`|`（OR）と自由に合成可能。HAVING内でも使える。
 
-### 7.8 NOT — `!` 前置
+### 7.9 NOT — `!` 前置
 
 `!` を IN / LIKE / EXISTS の述語の直前に置くと否定形になる。
 **直後の述語1つだけ**に適用される（`,` `|` を越えて伝播しない）。
@@ -461,7 +507,7 @@ EXISTSは述語なので `,`（AND）`|`（OR）と自由に合成可能。HAVIN
 `!` は v0 では**汎用の論理否定ではない** — IN / LIKE / EXISTS の前にだけ書ける。
 `?!a=1` はパースエラー。
 
-### 7.9 CASE — `?{ ... }`（中身はPHP風ternary）
+### 7.10 CASE — `?{ ... }`（中身はPHP風ternary）
 
 `?{ ... }` の中身はパーサが PHP/C/JS 風の三項演算子として解釈する。
 右再帰の `?:` チェーンは**フラットな多段 `CASE WHEN`** に潰してコンパイルする。
@@ -500,7 +546,7 @@ cond部分はWHEREと同じ式が書ける（`,` AND, `|` OR, 比較, IN, LIKE, 
 ELSE は省略不可（ternaryは常に両分岐必須）。NULLフォールバックが要るなら、
 将来 `null` リテラル対応待ちか、センチネル値を使うこと。
 
-### 7.10 COALESCE — `??` チェーン
+### 7.11 COALESCE — `??` チェーン
 
 `?{ ... }` の中の `??` はnull合体演算子。チェーンは平坦化されて単一の
 `COALESCE(...)` 呼び出しになる:
@@ -694,6 +740,10 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `*` | SELECT列の単独 | 全列 |
 | `*` | `<ident>.<*>` | qualified star（そのテーブル全列） |
 | `*` | JoinType | FULL JOIN |
+| `*` | 関数引数の位置 | `count(*)` イディオム |
+| `\|>` | SELECT節の先頭 | `SELECT DISTINCT` |
+| `\|>` | 関数引数の先頭 | 集約内 `DISTINCT` |
+| `~[ , ]` | predicate 内、列の直後 | BETWEEN |
 | `^(` | WHERE/HAVING内 | EXISTS サブクエリ |
 | `!` | 述語（IN / LIKE / EXISTS）の直前 | NOTマーカー |
 | `!=` | 2つのAtomの間 | 不等比較 |
@@ -718,8 +768,6 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | 項目 | 状態 | 備考 |
 |---|---|---|
 | 式中の算術（`a+b`, `a*2`） | 未対応 | SET 右辺の `+= -= *= /=` のみ可 |
-| `count(*)` の `*` 引数 | 未対応 | `count(id)` で代用 |
-| `BETWEEN` | 未対応 | `?x>=a,x<=b` で代用 |
 | UPDATE/DELETE の JOIN | 未対応 | |
 | IN/EXISTS以外での相関サブクエリ | 未対応 | IN: `[(subq)]`, EXISTS: `^(subq)` |
 | `!` を IN/LIKE/EXISTS 以外の述語に付ける | 未対応 | 例: `?!a=1` はパースエラー |
@@ -730,7 +778,6 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `BETWEEN`/`IS NULL` 等の独自短縮 | 未設計 | |
 | UNION / UNION ALL | 未対応 | |
 | WINDOW 関数 | 未対応 | |
-| DISTINCT | 未対応 | |
 
 ---
 
@@ -772,6 +819,16 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
   使いたい場合は明示的な括弧 `func((a,b),c)` を要求。以前は `()` 内でも
   `,` を AND として貪欲に消費していたため、`coalesce(a,b)` のような
   複数引数関数が書けなかった
+- **`|>` を SELECT-level と関数引数の両方で DISTINCT に流用**: 同じ
+  「重複を除いた値の流れ」を意味するので、マーカーを揃えて表面積を
+  小さく保つ。視覚的にも「絞られたパイプ」で、データは出ていくが
+  細くなる感じ。`|` の任意前置はクラウズ境界でのみ消費されるので、
+  式中の `|`-OR は影響を受けない
+- **`~[low,high]` で BETWEEN**: 日本語タイポグラフィで `~` は「〜から〜まで」
+  の自然な記号（`月〜金`）で、英語圏のプログラミングでも強い別用法と
+  競合しない。括弧で2要素を囲むことで「2つの値」を明示し、IN の `[ ... ]`
+  （`~` 前置なし）と区別される。NOT BETWEEN は既存の `!` マーカーを再利用し、
+  IN / LIKE / EXISTS / BETWEEN の否定構文を統一
 
 ### 12.1 演算子の語呂シート
 
@@ -799,6 +856,8 @@ LIMIT以外の方言差が増えてきたら `CompileOptions.dialect: "postgres"
 | `!` | C系言語の論理NOTから |
 | `?{ }` | 「どっち？」のブロック → CASEのアームを束ねる |
 | `??` | PHP/C# のNULL合体演算子をそのまま流用 |
+| `\|>` | 絞られたパイプ → DISTINCT（重複を除いた射出） |
+| `~[ , ]` | 日本語の「〜」（から〜まで）→ BETWEEN |
 
 ---
 

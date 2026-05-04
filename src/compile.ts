@@ -85,7 +85,7 @@ function emitMain(
   const tablesInScope = collectScope(from, expandedJoins);
   const columnHome = buildColumnHome(tablesInScope, options.schema);
 
-  segments.push(emitSelect(main.select, columnHome));
+  segments.push(emitSelect(main.select, columnHome, main.distinct));
 
   if (from) {
     segments.push(`FROM ${emitTableRef(from)}`);
@@ -233,15 +233,20 @@ function buildColumnHome(
 
 /* ---------- SELECT items / ORDER ---------- */
 
-function emitSelect(items: SelectItem[] | null, home: ColumnHome): string {
-  if (!items || items.length === 0) return "SELECT *";
+function emitSelect(
+  items: SelectItem[] | null,
+  home: ColumnHome,
+  distinct: boolean,
+): string {
+  const head = distinct ? "SELECT DISTINCT" : "SELECT";
+  if (!items || items.length === 0) return `${head} *`;
   const cols = items.map((it) => {
     if (it.type === "star") return "*";
     if (it.type === "qstar") return `${it.table}.*`;
     const expr = emitExpr(it.expr, home);
     return it.alias ? `${expr} AS ${it.alias}` : expr;
   });
-  return `SELECT ${cols.join(", ")}`;
+  return `${head} ${cols.join(", ")}`;
 }
 
 function emitOrderItem(it: OrderItem, home: ColumnHome): string {
@@ -378,6 +383,8 @@ function emitExpr(e: Expr, home: ColumnHome): string {
         : e.value
           ? "TRUE"
           : "FALSE";
+    case "star":
+      return "*";
     case "func":
       return `${e.name}(${e.args.map((a) => emitExpr(a, home)).join(", ")})`;
     case "group":
@@ -401,6 +408,10 @@ function emitExpr(e: Expr, home: ColumnHome): string {
       return emitLike(e, home, "LIKE");
     case "in":
       return emitIn(e, home, "IN");
+    case "between":
+      return emitBetween(e, home, "BETWEEN");
+    case "distinct":
+      return `DISTINCT ${emitExpr(e.expr, home)}`;
     case "exists":
       return `EXISTS (${compile(e.query, currentOptions)})`;
     case "case": {
@@ -423,6 +434,8 @@ function emitExpr(e: Expr, home: ColumnHome): string {
           return emitIn(inner, home, "NOT IN");
         case "like":
           return emitLike(inner, home, "NOT LIKE");
+        case "between":
+          return emitBetween(inner, home, "NOT BETWEEN");
         case "exists":
           return `NOT EXISTS (${compile(inner.query, currentOptions)})`;
         default:
@@ -464,6 +477,14 @@ function emitLike(
   const v = e.pattern.value;
   const pattern = v.includes("%") ? v : `%${v}%`;
   return `${emitExpr(e.col, home)} ${op} ${sqlString(pattern)}`;
+}
+
+function emitBetween(
+  e: Extract<Expr, { type: "between" }>,
+  home: ColumnHome,
+  op: string,
+): string {
+  return `${emitExpr(e.col, home)} ${op} ${emitExpr(e.low, home)} AND ${emitExpr(e.high, home)}`;
 }
 
 function wrapBool(e: Expr, home: ColumnHome): string {

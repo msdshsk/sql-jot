@@ -113,6 +113,7 @@ MainQuery
       const out = {
         from: from || null,
         select: null,
+        distinct: false,
         joins: [],
         where: null,
         group: null,
@@ -122,7 +123,10 @@ MainQuery
       };
       for (const c of clauses) {
         if (c.kind === "join") out.joins.push(c.value);
-        else out[c.kind] = c.value;
+        else if (c.kind === "select") {
+          out.select = c.value;
+          out.distinct = c.distinct;
+        } else out[c.kind] = c.value;
       }
       return out;
     }
@@ -137,7 +141,9 @@ Clause
   / LimitClause
 
 SelectClause
-  = ">" cols:ColList { return { kind: "select", value: cols }; }
+  = distinct:"|"? ">" cols:ColList {
+      return { kind: "select", value: cols, distinct: distinct === "|" };
+    }
 
 WhereClause
   = "?" expr:OrExpr { return { kind: "where", value: expr }; }
@@ -220,6 +226,9 @@ NegatablePredicate
   / col:QualifiedId "%" pattern:StringLiteral {
       return { type: "like", col, pattern };
     }
+  / col:QualifiedId "~" "[" _ low:Atom _ "," _ high:Atom _ "]" {
+      return { type: "between", col, low, high };
+    }
   / "^(" _ q:Start _ ")" {
       return { type: "exists", query: q };
     }
@@ -287,8 +296,15 @@ FuncArgList
 
 // Function args use `,` strictly as the arg separator (matching SQL).
 // AND inside an arg must be written with explicit parens: func((a,b),c).
+// `*` is permitted only here (e.g. count(*)) — not as a general Atom.
+// `|>` prefix marks DISTINCT inside an aggregate (e.g. count(|>col)).
 FuncArg
-  = first:Predicate rest:(_ "|" _ @Predicate)* {
+  = "*" { return { type: "star" }; }
+  / "|>" _ first:Predicate rest:(_ "|" _ @Predicate)* {
+      const inner = rest.length === 0 ? first : flatOr([first, ...rest]);
+      return { type: "distinct", expr: inner };
+    }
+  / first:Predicate rest:(_ "|" _ @Predicate)* {
       return rest.length === 0 ? first : flatOr([first, ...rest]);
     }
 

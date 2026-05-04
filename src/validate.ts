@@ -193,6 +193,14 @@ function walkExpr(
       // ref form: skip validation — the named entity could be a CTE
       // not visible to walkExpr's scope. Future: thread CTE names down.
       break;
+    case "between":
+      walkExpr(e.col, scope, resolver, issues);
+      walkExpr(e.low, scope, resolver, issues);
+      walkExpr(e.high, scope, resolver, issues);
+      break;
+    case "distinct":
+      walkExpr(e.expr, scope, resolver, issues);
+      break;
     case "exists":
       // Subquery is validated independently; correlated outer references
       // will warn for now (same limitation as IN-with-subquery).
@@ -219,6 +227,7 @@ function walkExpr(
     case "str":
     case "null":
     case "bool":
+    case "star":
       break;
   }
 }
