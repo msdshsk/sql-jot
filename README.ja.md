@@ -55,6 +55,10 @@ expand('users>?{score>=80?"pass":"fail"}@result');
 
 expand('users>?{nickname??"anon"}@display');
 // → "SELECT COALESCE(nickname, 'anon') AS display FROM users"
+
+expand("users?deleted_at=null,active=true");
+// → "SELECT * FROM users WHERE deleted_at IS NULL AND active = TRUE"
+//   ( =null は IS NULL に自動書き換え。!=null / <>null は IS NOT NULL )
 ```
 
 ## 演算子早見表
@@ -158,10 +162,13 @@ npm run dev
 - **CASE WHEN** — `?{cond?then:else}`（PHP風 ternary。右再帰チェーンは
   フラットな多段 CASE に潰す）
 - **COALESCE** — `?{...}` 内の `??` チェーン
+- **`null` / `true` / `false` リテラル** — `=null` / `!=null` / `<>null` は
+  `IS NULL` / `IS NOT NULL` に自動書き換え。SQL Server向けの真偽値
+  `1` / `0` 出力用に `CompileOptions.bool` フック
 - 暗黙の列修飾、スキーマベース検証、補完候補列挙、qualified-star（`t.*`）
 
 未対応項目は [SYNTAX.ja.md §11](SYNTAX.ja.md#11-v0-の未対応既知の制約) を参照。
-特に未対応な主要機能: `IS NULL`、`BETWEEN`、`DISTINCT`、集合演算
+特に未対応な主要機能: `BETWEEN`、`DISTINCT`、集合演算
 （`UNION`/`INTERSECT`/`EXCEPT`）、式中の算術、ウィンドウ関数、再帰CTE。
 
 ## 開発

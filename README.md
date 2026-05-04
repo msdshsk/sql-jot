@@ -56,6 +56,10 @@ expand('users>?{score>=80?"pass":"fail"}@result');
 
 expand('users>?{nickname??"anon"}@display');
 // → "SELECT COALESCE(nickname, 'anon') AS display FROM users"
+
+expand("users?deleted_at=null,active=true");
+// → "SELECT * FROM users WHERE deleted_at IS NULL AND active = TRUE"
+//   ( =null is auto-rewritten to IS NULL; !=null / <>null give IS NOT NULL )
 ```
 
 ## Syntax at a glance
@@ -161,11 +165,14 @@ The core covers:
 - **CASE WHEN** via `?{cond?then:else}` (PHP-style ternary; right-recursive
   chains collapse to flat multi-arm CASE)
 - **COALESCE** via `??` chains inside `?{...}`
+- **`null` / `true` / `false` literals**, with auto `IS NULL` / `IS NOT NULL`
+  rewrite for `=null` / `!=null` / `<>null`. `CompileOptions.bool` hook for
+  SQL Server's `1` / `0` boolean rendering
 - Implicit column qualification, schema-aware validation, completion
   candidates, qualified-star (`t.*`)
 
 See [SYNTAX.md §11](SYNTAX.md#11-v0-limitations) for the current limitation
-list. Notably absent: `IS NULL`, `BETWEEN`, `DISTINCT`, set operations
+list. Notably absent: `BETWEEN`, `DISTINCT`, set operations
 (`UNION`/`INTERSECT`/`EXCEPT`), arithmetic in expressions, window
 functions, recursive CTE.
 
